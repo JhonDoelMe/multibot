@@ -1,0 +1,16 @@
+{
+  "version": 2,
+  "functions": {
+    "api/bot.py": {
+      "runtime": "python@3.9",
+      "memory": 128,
+      "maxDuration": 10
+    }
+  },
+  "routes": [
+    {
+      "src": "/bot",
+      "dest": "/api/bot.py"
+    }
+  ]
+}
