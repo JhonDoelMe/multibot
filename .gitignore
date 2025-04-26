@@ -91,3 +91,5 @@ src/db/local_database.db
 # Fly.io local state (just in case) # <<< НАШЕ ДОБАВЛЕНИЕ >>>
 .fly/
 db_url.txt
+redeploy_gcp.bat
+secret_value.txt
