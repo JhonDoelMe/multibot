@@ -81,5 +81,12 @@ dmypy.json
 .idea/
 *.swp
 *~
+
+# ... (все предыдущие строки) ...
+
 # Database files
 src/db/local_database.db
+*.db-journal
+
+# Fly.io local state (just in case) # <<< НАШЕ ДОБАВЛЕНИЕ >>>
+.fly/
