@@ -1,12 +1,11 @@
 {
   "version": 2,
-  "functions": {
-    "api/bot.py": {
-      "runtime": "python3",
-      "memory": 128,
-      "maxDuration": 10
+  "builds": [
+    {
+      "src": "api/bot.py",
+      "use": "@vercel/python"
     }
-  },
+  ],
   "routes": [
     {
       "src": "/bot",
