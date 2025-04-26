@@ -1,0 +1,4 @@
+aiogram>=3.0.0 # Используем aiogram 3+
+python-dotenv>=1.0.0
+aiohttp>=3.8.0 # Для вебхука и HTTP-запросов
+# Добавим позже: sqlalchemy, asyncpg/aiosqlite, httpx (альтернатива aiohttp client)
