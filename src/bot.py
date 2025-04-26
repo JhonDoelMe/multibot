@@ -29,24 +29,14 @@ logger = logging.getLogger(__name__)
 
 # --- Функции для запуска/остановки ---
 
-async def on_startup(bot: Bot): # <<< Убрали webhook_url
-    """ Выполняется при старте бота: инициализация БД и удаление старого вебхука (для polling). """
+async def on_startup(bot: Bot):
     logger.info("Executing on_startup actions...")
-    # Инициализация БД (остается здесь)
-    # (Вынесено в main для контроля над регистрацией middleware)
-    # if config.DATABASE_URL: ... await init_db() ...
-
-    # --- Логика установки вебхука УБРАНА отсюда ---
-    # if webhook_url: ... await bot.set_webhook(...) ...
-
-    # Если работаем в режиме polling, удаляем вебхук
     if not config.RUN_WITH_WEBHOOK:
          logger.info("Running in polling mode, deleting potential webhook...")
          await bot.delete_webhook(drop_pending_updates=True)
          logger.info("Webhook deleted.")
 
 async def on_shutdown(bot: Bot):
-    """ Выполняется при остановке бота. """
     logger.warning("Executing on_shutdown actions...")
     logger.warning("Bot shutdown complete.")
 
@@ -84,8 +74,7 @@ async def main() -> None:
     dp.include_router(common_handlers.router)
     logger.info("All routers registered.")
 
-    # --- Вызов on_startup (без установки вебхука) ---
-    # Выполняем ДО старта сервера/поллинга
+    # --- Вызов on_startup ---
     await on_startup(bot)
 
     # --- Логика запуска ---
@@ -93,16 +82,18 @@ async def main() -> None:
         if config.RUN_WITH_WEBHOOK:
             # --- Режим Вебхука ---
             logger.warning("Starting bot in WEBHOOK mode...")
-            # Формирование URL и вызов set_webhook УБРАНЫ
 
+            # Создаем приложение aiohttp
             app = web.Application()
             app["bot"] = bot
             app["dp"] = dp
+            logger.info("aiohttp Application created.")
 
+            # Регистрируем обработчик вебхуков
             webhook_requests_handler = SimpleRequestHandler(
                 dispatcher=dp,
                 bot=bot,
-                secret_token=config.BOT_TOKEN[:10] # Секрет для проверки запросов
+                secret_token=config.BOT_TOKEN[:10]
             )
             if config.WEBHOOK_PATH:
                 webhook_requests_handler.register(app, path=config.WEBHOOK_PATH)
@@ -110,25 +101,32 @@ async def main() -> None:
             else:
                  logger.error("WEBHOOK_PATH is not set! Cannot register webhook handler.")
 
-
+            # Связываем aiogram с aiohttp
             setup_application(app, dp, bot=bot)
-            logger.info(f"Starting aiohttp server on {config.WEBAPP_HOST}:{config.WEBAPP_PORT}")
+            logger.info("aiohttp Application setup complete.")
+
+            # Запускаем веб-сервер
             runner = web.AppRunner(app)
             await runner.setup()
+            logger.info("aiohttp AppRunner setup complete.")
             site = web.TCPSite(runner, config.WEBAPP_HOST, config.WEBAPP_PORT)
+            logger.info(f"Attempting to start web server on {config.WEBAPP_HOST}:{config.WEBAPP_PORT}...")
             await site.start()
-            logger.info("Web server started.")
-            await asyncio.Event().wait() # Ожидание для работы сервера
+            logger.info("Web server started successfully (site.start() completed).") # <<< Важный лог
+
+            # Ожидаем вечно
+            logger.info("Starting infinite wait loop (asyncio.Event().wait())...") # <<< Важный лог
+            await asyncio.Event().wait()
+            logger.warning("Infinite wait loop somehow finished (THIS IS UNEXPECTED!).") # <<< Не должно появиться
 
         else:
             # --- Режим Поллинга ---
             logger.warning("Starting bot in POLLING mode...")
-            # on_startup уже был вызван выше (он удалит вебхук)
             logger.info("Starting polling...")
             await dp.start_polling(bot)
 
     finally:
-        logger.warning("Closing bot session...")
+        logger.warning("Closing bot session (in finally block)...")
         await bot.session.close()
         logger.warning("Bot session closed.")
         await on_shutdown(bot)
