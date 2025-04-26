@@ -12,14 +12,14 @@ from aiogram.fsm.storage.memory import MemoryStorage
 # Импортируем конфигурацию
 from src import config
 # --- Импорт для БД ---
-from src.db.database import init_db, async_session_factory # <<< Импортируем фабрику сессий
+from src.db.database import init_db, async_session_factory
 # --- Импорт Middleware ---
-from src.middlewares.db_session import DbSessionMiddleware # <<< Импортируем Middleware
+from src.middlewares.db_session import DbSessionMiddleware
 
 # Импортируем роутеры
 # (Порядок важен: сначала специфичные, потом общие)
 from src.modules.weather import handlers as weather_handlers
-# from src.modules.currency import handlers as currency_handlers
+from src.modules.currency import handlers as currency_handlers # <<< Импортируем роутер валют
 # from src.modules.alert import handlers as alert_handlers
 from src.handlers import common as common_handlers
 
@@ -37,8 +37,6 @@ async def main() -> None:
         await init_db()
     else:
         logger.warning("DATABASE_URL is not set. Skipping database initialization.")
-        # Если БД критична, возможно, стоит прекратить выполнение или работать в ограниченном режиме
-        # exit("Database URL is required.") # Например
 
     # --- Инициализация Aiogram ---
     storage = MemoryStorage()
@@ -47,8 +45,7 @@ async def main() -> None:
     dp = Dispatcher(storage=storage)
 
     # --- Регистрация Middleware ---
-    # Middleware сессии БД будет срабатывать ДО роутеров для КАЖДОГО события
-    if async_session_factory: # Убедимся, что фабрика сессий создана (DATABASE_URL был задан)
+    if async_session_factory:
         dp.update.outer_middleware(DbSessionMiddleware(session_pool=async_session_factory))
         logger.info("Database session middleware registered.")
     else:
@@ -59,8 +56,8 @@ async def main() -> None:
     # СНАЧАЛА регистрируем роутеры модулей
     dp.include_router(weather_handlers.router)
     logger.info("Weather module router registered.")
-    # dp.include_router(currency_handlers.router)
-    # logger.info("Currency module router registered.")
+    dp.include_router(currency_handlers.router) # <<< Регистрируем роутер валют
+    logger.info("Currency module router registered.")
     # dp.include_router(alert_handlers.router)
     # logger.info("Alert module router registered.")
 
