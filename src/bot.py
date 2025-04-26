@@ -19,8 +19,8 @@ from src.middlewares.db_session import DbSessionMiddleware
 # Импортируем роутеры
 # (Порядок важен: сначала специфичные, потом общие)
 from src.modules.weather import handlers as weather_handlers
-from src.modules.currency import handlers as currency_handlers # <<< Импортируем роутер валют
-# from src.modules.alert import handlers as alert_handlers
+from src.modules.currency import handlers as currency_handlers
+from src.modules.alert import handlers as alert_handlers # <<< Импортируем роутер тревог
 from src.handlers import common as common_handlers
 
 
@@ -56,10 +56,10 @@ async def main() -> None:
     # СНАЧАЛА регистрируем роутеры модулей
     dp.include_router(weather_handlers.router)
     logger.info("Weather module router registered.")
-    dp.include_router(currency_handlers.router) # <<< Регистрируем роутер валют
+    dp.include_router(currency_handlers.router)
     logger.info("Currency module router registered.")
-    # dp.include_router(alert_handlers.router)
-    # logger.info("Alert module router registered.")
+    dp.include_router(alert_handlers.router) # <<< Регистрируем роутер тревог
+    logger.info("Alert module router registered.")
 
     # В КОНЦЕ регистрируем общие обработчики
     dp.include_router(common_handlers.router)
