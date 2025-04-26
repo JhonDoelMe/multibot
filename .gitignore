@@ -81,3 +81,5 @@ dmypy.json
 .idea/
 *.swp
 *~
+# Database files
+src/db/local_database.db
