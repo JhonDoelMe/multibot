@@ -11,63 +11,77 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.orm import DeclarativeBase
 
-# Импортируем URL базы данных из конфигурации
 from src.config import DATABASE_URL
 
 logger = logging.getLogger(__name__)
 
-# Проверяем, задан ли URL базы данных
-if not DATABASE_URL:
-    logger.error("DATABASE_URL is not set in the environment variables or .env file.")
-    # В реальном приложении здесь можно либо выйти, либо работать без БД,
-    # установив engine и session_factory в None и проверяя их перед использованием.
-    # Пока просто создадим None, чтобы код ниже не падал при импорте.
-    async_engine = None
-    async_session_factory = None
-else:
-    logger.info(f"Connecting to database: {DATABASE_URL}")
-    # Создаем асинхронный "движок" SQLAlchemy
-    # echo=True - выводит все SQL-запросы в лог (полезно для отладки)
-    # echo=False - отключает вывод запросов (для production)
-    async_engine = create_async_engine(DATABASE_URL, echo=False)
+# Определяем переменные на уровне модуля, но инициализируем как None
+async_engine = None
+async_session_factory = None
 
-    # Создаем фабрику асинхронных сессий
-    # expire_on_commit=False рекомендуется для asyncio, чтобы объекты были доступны после коммита
-    async_session_factory = async_sessionmaker(async_engine, expire_on_commit=False)
-
-# Базовый класс для декларативных моделей SQLAlchemy
-# AsyncAttrs позволяет использовать await для загрузки связанных данных (lazy loading)
+# Базовый класс для моделей остается здесь
 class Base(AsyncAttrs, DeclarativeBase):
     pass
 
-# Функция для инициализации БД (создания таблиц)
-async def init_db():
-    """Инициализирует базу данных, создавая все таблицы."""
-    if not async_engine:
-        logger.error("Database engine is not initialized. Cannot init DB.")
-        return
-    async with async_engine.begin() as conn:
-        logger.info("Dropping and creating tables...") # Опционально: удалить старые таблицы
-        # await conn.run_sync(Base.metadata.drop_all) # Раскомментируйте для удаления таблиц перед созданием
-        await conn.run_sync(Base.metadata.create_all)
-        logger.info("Tables created successfully.")
+# --- Модели должны быть импортированы ПОСЛЕ определения Base ---
+# (Если бы у нас были модели в других файлах, импортировали бы их тут)
+# from src.db.models import User # Пример
 
-# Функция-генератор для получения сессии БД (для использования с Depends или middleware)
+async def initialize_database() -> bool:
+    """
+    Инициализирует асинхронный движок, фабрику сессий и создает таблицы.
+    Вызывается один раз при старте приложения.
+
+    Returns:
+        True, если инициализация прошла успешно, иначе False.
+    """
+    global async_engine, async_session_factory # Объявляем, что будем менять глобальные переменные
+
+    if not DATABASE_URL:
+        logger.error("DATABASE_URL is not set. Database features disabled.")
+        return False
+
+    logger.info(f"Initializing database connection for: {DATABASE_URL.split('@')[0]}...") # Лог без пароля
+
+    try:
+        # --- Создание движка и фабрики сессий ПЕРЕНЕСЕНО СЮДА ---
+        async_engine = create_async_engine(DATABASE_URL, echo=False)
+        async_session_factory = async_sessionmaker(async_engine, expire_on_commit=False)
+        logger.info("Database engine and session factory created.")
+
+        # Проверяем соединение и создаем таблицы
+        async with async_engine.begin() as conn:
+            logger.info("Creating/checking database tables...")
+            # await conn.run_sync(Base.metadata.drop_all) # Раскомментируйте для удаления таблиц при каждом старте
+            await conn.run_sync(Base.metadata.create_all)
+            logger.info("Database tables checked/created successfully.")
+        return True # Инициализация успешна
+
+    except Exception as e:
+        # Логируем полную ошибку, чтобы понять причину сбоя
+        logger.exception(f"Failed to initialize database or connect: {e}", exc_info=True)
+        # Сбрасываем engine и factory в None при ошибке
+        async_engine = None
+        async_session_factory = None
+        return False # Инициализация не удалась
+
+
 async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
-    """Генератор для получения сессии базы данных."""
+    """ Генератор для получения сессии базы данных (использует глобальную фабрику). """
     if not async_session_factory:
+        # Эта ошибка не должна происходить, если initialize_database() был вызван успешно
+        # и middleware зарегистрирован после этого.
         logger.error("Session factory is not initialized. Cannot get DB session.")
-        yield None # Возвращаем None, если фабрика не создана
+        yield None
         return
 
     async with async_session_factory() as session:
         try:
             yield session
-            await session.commit() # Коммитим изменения, если все прошло успешно
-        except Exception as e:
-            logger.exception(f"Database session rollback due to exception: {e}")
-            await session.rollback() # Откатываем изменения при ошибке
-            raise # Пробрасываем исключение дальше
-        finally:
-            # Сессия автоматически закрывается при выходе из `async with`
-            pass
+            # Коммит/Роллбэк теперь полностью зависит от Middleware или вызывающего кода
+        except Exception:
+            logger.exception("Exception in DB session, rolling back.")
+            await session.rollback()
+            raise
+        # finally: # Коммит здесь больше не нужен, Middleware его делает
+        #     await session.commit() # УБРАНО

@@ -90,3 +90,4 @@ src/db/local_database.db
 
 # Fly.io local state (just in case) # <<< НАШЕ ДОБАВЛЕНИЕ >>>
 .fly/
+db_url.txt
