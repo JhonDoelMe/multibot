@@ -1,4 +1,4 @@
-# src/bot.py (Возвращаем полную логику вебхука, без print)
+# src/bot.py
 
 import asyncio
 import logging
@@ -15,9 +15,10 @@ from aiogram.types import Update
 
 from src import config
 # --- Импорт для БД ---
-from src.db.database import initialize_database #, async_session_factory <- Не импортируем фабрику
+from src.db.database import initialize_database, async_session_factory
 # --- Импорт Middleware ---
 from src.middlewares.db_session import DbSessionMiddleware
+from src.middlewares.rate_limit import ThrottlingMiddleware # <<< Добавили импорт Throttling
 
 # Импортируем роутеры
 from src.modules.weather import handlers as weather_handlers
@@ -30,6 +31,7 @@ logger = logging.getLogger(__name__)
 # --- Функции для запуска/остановки ---
 
 async def on_startup(bot: Bot):
+    """ Выполняется при старте бота: инициализация БД и удаление старого вебхука (для polling). """
     logger.info("Executing on_startup actions...")
     if not config.RUN_WITH_WEBHOOK:
          logger.info("Running in polling mode, deleting potential webhook...")
@@ -38,6 +40,7 @@ async def on_startup(bot: Bot):
     # Убрали установку вебхука отсюда
 
 async def on_shutdown(bot: Bot):
+    """ Выполняется при остановке бота. """
     logger.warning("Executing on_shutdown actions...")
     logger.warning("Bot shutdown complete.")
 
@@ -56,7 +59,7 @@ async def main() -> None:
 
     # --- Инициализация Aiogram ---
     logger.info("Initializing Aiogram components...")
-    storage = MemoryStorage()
+    storage = MemoryStorage() # Можно заменить на RedisStorage, если Redis настроен
     default_props = DefaultBotProperties(parse_mode=ParseMode.HTML)
     try:
         bot = Bot(token=config.BOT_TOKEN, default=default_props)
@@ -69,18 +72,24 @@ async def main() -> None:
     logger.info("Aiogram Dispatcher initialized.")
 
     # --- Регистрация Middleware ---
+    # Сначала сессия БД
     if db_initialized and session_factory:
         dp.update.outer_middleware(DbSessionMiddleware(session_pool=session_factory))
         logger.info("Database session middleware registered.")
     else:
         logger.warning("Database session middleware skipped (DB not initialized or session factory missing).")
 
-    # --- Регистрация роутеров ---
+    # Затем Throttling (ограничение частоты)
+    dp.update.outer_middleware(ThrottlingMiddleware(default_rate=0.5)) # Лимит 0.5 сек
+    logger.info("Throttling middleware registered.")
+    # ---------------------------------------------------
+
+    # --- Регистрация роутеров (идет после middleware) ---
     logger.info("Registering routers...")
     dp.include_router(weather_handlers.router)
     dp.include_router(currency_handlers.router)
     dp.include_router(alert_handlers.router)
-    dp.include_router(common_handlers.router)
+    dp.include_router(common_handlers.router) # Общий роутер последним
     logger.info("All routers registered.")
 
     # --- Вызов on_startup ---
@@ -89,7 +98,7 @@ async def main() -> None:
     # --- Логика запуска ---
     try:
         if config.RUN_WITH_WEBHOOK:
-            # --- Режим Вебхука (ПОЛНАЯ ВЕРСИЯ) ---
+            # --- Режим Вебхука ---
             logger.warning("Starting bot in WEBHOOK mode...")
 
             app = web.Application()
@@ -119,9 +128,8 @@ async def main() -> None:
             await site.start()
             logger.info("Web server started successfully.")
 
-            # Ожидаем вечно
             logger.info("Starting infinite wait loop for web server...")
-            await asyncio.Event().wait()
+            await asyncio.Event().wait() # Ожидаем вечно
             logger.warning("Infinite wait loop somehow finished (UNEXPECTED!).")
 
         else:
