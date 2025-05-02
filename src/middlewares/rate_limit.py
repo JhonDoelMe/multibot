@@ -4,18 +4,10 @@ import time
 import logging
 from typing import Callable, Dict, Any, Awaitable
 
-from aiogram import BaseMiddleware, Dispatcher
+from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject, Message, CallbackQuery
 from aiogram.dispatcher.flags import get_flag
-
-# Универсальный импорт CancelHandler для разных версий aiogram
-try:
-    from aiogram.dispatcher.middlewares import CancelHandler  # aiogram 3.x (новые)
-except ImportError:
-    try:
-        from aiogram.dispatcher.handler import CancelHandler  # aiogram 2.x
-    except ImportError:
-        CancelHandler = Dispatcher.CancelHandler  # aiogram 3.x (последние)
+from aiogram.exceptions import CancelHandler  # корректный импорт для aiogram 3.x
 
 logger = logging.getLogger(__name__)
 
