@@ -1,8 +1,8 @@
-# src/db/database.py
+# src/db/database.py (версия без print)
 
 import logging
 import sys
-from typing import AsyncGenerator, Tuple, Optional # Добавляем Tuple, Optional
+from typing import AsyncGenerator, Tuple, Optional
 
 from sqlalchemy.ext.asyncio import (
     create_async_engine,
@@ -17,22 +17,17 @@ from src.config import DATABASE_URL
 
 logger = logging.getLogger(__name__)
 
-# Убираем глобальные переменные engine/factory отсюда
-# async_engine = None
-# async_session_factory = None
+# Убрали engine/factory отсюда
 
 class Base(AsyncAttrs, DeclarativeBase):
     pass
 
-# Возвращаемый тип: кортеж из bool (успех?) и опциональной фабрики сессий
 async def initialize_database() -> Tuple[bool, Optional[async_sessionmaker[AsyncSession]]]:
-    # global async_engine, async_session_factory # Убираем global
-
     logger.info("Attempting database initialization...")
 
     if not DATABASE_URL:
-        logger.error("DATABASE_URL not set. Database features disabled.")
-        return False, None # Возвращаем неуспех и None для фабрики
+        logger.error("DATABASE_URL is not set. Database features disabled.")
+        return False, None
 
     logger.info(f"Initializing database connection for: {DATABASE_URL.split('@')[-1]}")
 
@@ -44,7 +39,6 @@ async def initialize_database() -> Tuple[bool, Optional[async_sessionmaker[Async
         logger.info("Database engine created.")
 
         logger.info("Creating session factory...")
-        # Создаем фабрику во временную переменную
         temp_session_factory = async_sessionmaker(temp_engine, expire_on_commit=False)
         logger.info("Database session factory created.")
 
@@ -54,17 +48,11 @@ async def initialize_database() -> Tuple[bool, Optional[async_sessionmaker[Async
             logger.info("Database tables checked/created successfully.")
 
         logger.info("Database initialization successful.")
-        # Возвращаем успех и СОЗДАННУЮ ФАБРИКУ
         return True, temp_session_factory
 
     except Exception as e:
         logger.exception(f"Failed to initialize database or connect: {e}", exc_info=True)
         # Движок и фабрика не были успешно созданы или присвоены
-        return False, None # Возвращаем неуспех и None
+        return False, None
 
-
-# !!! Важно: get_db_session теперь не может работать, так как фабрика не глобальна
-# !!! Мы должны передавать фабрику в Middleware при регистрации
-# async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
-#     # Этот код больше не будет работать правильно
-#     pass # Нужно удалить или переделать, если понадобится вне middleware
+# Удалили get_db_session, так как он не нужен при передаче фабрики в Middleware
