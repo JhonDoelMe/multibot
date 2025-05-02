@@ -1,4 +1,4 @@
-# src/modules/weather/handlers.py (возвращаем commit)
+# src/modules/weather/handlers.py
 
 import logging
 from typing import Union
@@ -27,8 +27,11 @@ class WeatherStates(StatesGroup):
     waiting_for_city = State()
     waiting_for_save_decision = State()
 
-async def _get_and_show_weather(target: Union[Message, CallbackQuery], state: FSMContext, session: AsyncSession, city_name: str):
-    # (Эта функция остается без изменений)
+async def _get_and_show_weather(target: Union[Message, CallbackQuery], state: FSMContext, session: AsyncSession, user_city_input: str): # <<< Принимаем user_city_input
+    """
+    Получает погоду, отображает результат (используя user_city_input для отображения)
+    и предлагает сохранить город (используя user_city_input для вопроса, но сохраняя API-версию).
+    """
     user_id = target.from_user.id
     message_to_edit = None
 
@@ -36,48 +39,63 @@ async def _get_and_show_weather(target: Union[Message, CallbackQuery], state: FS
         message_to_edit = target.message
         await target.answer()
     else:
+        # Отправляем новое сообщение и сохраняем его для редактирования
         message_to_edit = await target.answer("🔍 Отримую дані про погоду...")
 
-    logger.info(f"User {user_id} requesting weather for city: {city_name}")
-    weather_data = await get_weather_data(city_name)
+    # Запрашиваем погоду по тому, что ввел пользователь
+    logger.info(f"User {user_id} requesting weather for user input: {user_city_input}")
+    weather_data = await get_weather_data(user_city_input)
 
     if weather_data and weather_data.get("cod") == 200:
-        actual_city_name = weather_data.get("name", city_name)
-        weather_message = format_weather_message(weather_data, actual_city_name)
-        logger.info(f"Sent weather for {actual_city_name} to user {user_id}")
+        # Успех. Берем имя из ответа API для сохранения, а ввод пользователя для отображения
+        actual_city_name_from_api = weather_data.get("name", user_city_input) # Имя, которое понял OWM
+        city_display_name = user_city_input.capitalize() # Имя для показа пользователю
 
-        await state.update_data(last_successful_city=actual_city_name)
+        # Форматируем сообщение, передавая ИМЯ ДЛЯ ОТОБРАЖЕНИЯ
+        weather_message = format_weather_message(weather_data, city_display_name)
+        logger.info(f"Formatted weather for display name '{city_display_name}' (API name: '{actual_city_name_from_api}') for user {user_id}")
 
-        text_to_send = f"{weather_message}\n\n💾 Зберегти <b>{actual_city_name}</b> як основне місто?"
+        # Сохраняем ОБА имени в состояние FSM для следующего шага
+        await state.update_data(
+            city_to_save=actual_city_name_from_api, # Имя от API для сохранения в БД
+            city_display_name=city_display_name     # Имя от пользователя для показа в сообщении подтверждения
+        )
+
+        # Формируем текст: погода + вопрос о сохранении (с именем от пользователя)
+        text_to_send = f"{weather_message}\n\n💾 Зберегти <b>{city_display_name}</b> як основне місто?" # <<< Используем ввод пользователя
         reply_markup = get_save_city_keyboard()
         await message_to_edit.edit_text(text_to_send, reply_markup=reply_markup)
         await state.set_state(WeatherStates.waiting_for_save_decision)
 
+    # --- Обработка ошибок (без изменений) ---
     elif weather_data and weather_data.get("cod") == 404:
-        error_text = f"😔 На жаль, місто '<b>{city_name}</b>' не знайдено. Спробуйте іншу назву або перевірте написання."
+        error_text = f"😔 На жаль, місто '<b>{user_city_input}</b>' не знайдено. Спробуйте іншу назву або перевірте написання."
         reply_markup = get_weather_back_keyboard()
         await message_to_edit.edit_text(error_text, reply_markup=reply_markup)
-        logger.warning(f"City '{city_name}' not found for user {user_id}")
+        logger.warning(f"City '{user_city_input}' not found for user {user_id}")
         await state.clear()
     else:
         error_code = weather_data.get('cod', 'N/A') if weather_data else 'N/A'
-        error_text = f"😥 Вибачте, сталася помилка при отриманні погоди (Код: {error_code}). Спробуйте пізніше."
+        error_api_message = weather_data.get('message', 'Internal error') if weather_data else 'Internal error'
+        error_text = f"😥 Вибачте, сталася помилка при отриманні погоди для '<b>{user_city_input}</b>' (Код: {error_code} - {error_api_message}). Спробуйте пізніше."
         reply_markup = get_weather_back_keyboard()
         await message_to_edit.edit_text(error_text, reply_markup=reply_markup)
-        logger.error(f"Failed to get weather for {city_name} for user {user_id}. Code: {error_code}")
+        logger.error(f"Failed to get weather for {user_city_input} for user {user_id}. Code: {error_code}, Msg: {error_api_message}")
         await state.clear()
 
-# --- Обработчики основного потока (остаются без изменений) ---
+# --- Обработчики основного потока ---
 @router.callback_query(F.data == CALLBACK_WEATHER)
 async def handle_weather_entry(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
-    # ... (код без изменений) ...
     user_id = callback.from_user.id
     db_user = await session.get(User, user_id)
 
     if db_user and db_user.preferred_city:
-        logger.info(f"User {user_id} has preferred city: {db_user.preferred_city}")
-        await state.update_data(preferred_city=db_user.preferred_city)
-        text = f"Ваше збережене місто: <b>{db_user.preferred_city}</b>.\nПоказати погоду для нього?"
+        # Используем сохраненный город (который был от API)
+        saved_city = db_user.preferred_city
+        logger.info(f"User {user_id} has preferred city: {saved_city}")
+        await state.update_data(preferred_city=saved_city) # Сохраняем в FSM
+        # Показываем его пользователю (можно его же, можно попытаться найти укр. вариант - пока показываем его)
+        text = f"Ваше збережене місто: <b>{saved_city}</b>.\nПоказати погоду для нього?"
         reply_markup = get_city_confirmation_keyboard()
         await callback.message.edit_text(text, reply_markup=reply_markup)
         await state.set_state(WeatherStates.waiting_for_confirmation)
@@ -92,23 +110,23 @@ async def handle_weather_entry(callback: CallbackQuery, state: FSMContext, sessi
 
 @router.callback_query(WeatherStates.waiting_for_confirmation, F.data == CALLBACK_WEATHER_USE_SAVED)
 async def handle_use_saved_city(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
-    # ... (код без изменений) ...
     user_data = await state.get_data()
-    saved_city = user_data.get("preferred_city")
+    saved_city = user_data.get("preferred_city") # Берем сохраненное ИЗ БД (оно же от API)
     user_id = callback.from_user.id
 
     if saved_city:
         logger.info(f"User {user_id} confirmed using saved city: {saved_city}")
-        await _get_and_show_weather(callback, state, session, saved_city)
+        # Передаем его как user_city_input, так как пользователь согласился с ним
+        await _get_and_show_weather(callback, state, session, user_city_input=saved_city)
     else:
         logger.warning(f"User {user_id} confirmed using saved city, but city not found in state.")
         await callback.message.edit_text("Щось пішло не так. Будь ласка, введіть назву міста:")
         await state.set_state(WeatherStates.waiting_for_city)
         await callback.answer()
 
+
 @router.callback_query(WeatherStates.waiting_for_confirmation, F.data == CALLBACK_WEATHER_OTHER_CITY)
 async def handle_other_city_request(callback: CallbackQuery, state: FSMContext):
-    # ... (код без изменений) ...
     logger.info(f"User {callback.from_user.id} chose to enter another city.")
     await callback.message.edit_text("🌍 Будь ласка, введіть назву міста:")
     await state.set_state(WeatherStates.waiting_for_city)
@@ -117,21 +135,23 @@ async def handle_other_city_request(callback: CallbackQuery, state: FSMContext):
 
 @router.message(WeatherStates.waiting_for_city)
 async def handle_city_input(message: Message, state: FSMContext, session: AsyncSession):
-    # ... (код без изменений) ...
-    city_name = message.text.strip()
-    await _get_and_show_weather(message, state, session, city_name)
+    user_city_input = message.text.strip()
+    # Передаем ввод пользователя в функцию
+    await _get_and_show_weather(message, state, session, user_city_input=user_city_input)
 
 
-# --- Обработчики сохранения города (ВОЗВРАЩАЕМ ЯВНЫЙ COMMIT) ---
+# --- Обработчики сохранения города (изменены) ---
 @router.callback_query(WeatherStates.waiting_for_save_decision, F.data == CALLBACK_WEATHER_SAVE_CITY_YES)
 async def handle_save_city_yes(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
-    """ Обрабатывает ответ 'Да' на вопрос о сохранении города. """
     user_data = await state.get_data()
-    city_to_save = user_data.get("last_successful_city")
+    # Берем имя от API для сохранения в БД
+    city_to_save_in_db = user_data.get("city_to_save")
+    # Берем имя от пользователя для отображения в сообщении
+    city_display_name = user_data.get("city_display_name")
     user_id = callback.from_user.id
 
-    if not city_to_save:
-        logger.error(f"Cannot save city for user {user_id}: city name not found in state.")
+    if not city_to_save_in_db or not city_display_name: # Проверяем оба
+        logger.error(f"Cannot save city for user {user_id}: city name (API or display) not found in state.")
         await state.clear()
         await show_main_menu(callback, "Помилка: не вдалося отримати назву міста для збереження.")
         return
@@ -139,19 +159,20 @@ async def handle_save_city_yes(callback: CallbackQuery, state: FSMContext, sessi
     db_user = await session.get(User, user_id)
     if db_user:
         try:
-            db_user.preferred_city = city_to_save
+            # В БД сохраняем имя, которое вернуло API
+            db_user.preferred_city = city_to_save_in_db
             session.add(db_user)
-            # !!! ВОЗВРАЩАЕМ ЯВНЫЙ COMMIT !!!
-            await session.commit()
-            logger.info(f"User {user_id} saved city: {city_to_save}. Explicit commit executed.") # Обновили лог
+            await session.commit() # Оставляем явный коммит здесь
+            logger.info(f"User {user_id} saved city to DB: {city_to_save_in_db}. Explicit commit executed.")
 
-            text = f"✅ Місто <b>{city_to_save}</b> збережено як основне.\n\n" + callback.message.text.split('\n\n')[0]
+            # В сообщении показываем имя, которое ввел пользователь
+            text = f"✅ Місто <b>{city_display_name}</b> збережено як основне.\n\n" + callback.message.text.split('\n\n')[0]
             reply_markup = get_weather_back_keyboard()
             await callback.message.edit_text(text, reply_markup=reply_markup)
 
         except Exception as e:
             logger.exception(f"Database error while saving city for user {user_id}: {e}")
-            await session.rollback() # Явно откатываем сессию при ошибке коммита
+            await session.rollback()
             await callback.message.edit_text("😥 Виникла помилка при збереженні міста.")
     else:
         logger.error(f"Cannot save city for user {user_id}: user not found in DB.")
@@ -163,9 +184,16 @@ async def handle_save_city_yes(callback: CallbackQuery, state: FSMContext, sessi
 # --- Остальные обработчики без изменений ---
 @router.callback_query(WeatherStates.waiting_for_save_decision, F.data == CALLBACK_WEATHER_SAVE_CITY_NO)
 async def handle_save_city_no(callback: CallbackQuery, state: FSMContext):
-    # ... (код без изменений) ...
+    # ... (код без изменений, использует текст из предыдущего сообщения) ...
     logger.info(f"User {callback.from_user.id} chose not to save the city.")
-    text = callback.message.text.split('\n\n')[0]
+    # Берем имя для отображения из состояния, если оно есть, чтобы точно убрать вопрос
+    user_data = await state.get_data()
+    city_display_name = user_data.get("city_display_name", "місто") # Запасной вариант
+
+    # Формируем текст заново, используя только погодную часть
+    weather_part = callback.message.text.split('\n\n')[0]
+    text = f"{weather_part}\n\n(Місто <b>{city_display_name}</b> не збережено)" # Показываем, что не сохранили
+
     reply_markup = get_weather_back_keyboard()
     await callback.message.edit_text(text, reply_markup=reply_markup)
     await state.clear()
