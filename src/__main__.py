@@ -2,22 +2,17 @@
 
 import asyncio
 import logging
-import logging.handlers # <<< Добавляем handlers
+import logging.handlers
 import sys
-import os # <<< Добавляем os для пути к логу
+import os
 
-# --- Настройка логирования ---
-# Определяем путь к лог-файлу (в корне проекта)
+# --- Настройка логирования (остается как было) ---
 LOG_FILENAME = "bot.log"
-LOG_MAX_BYTES = 5 * 1024 * 1024  # 5 MB
-LOG_BACKUP_COUNT = 5 # Хранить 5 старых лог-файлов
-
-# Создаем форматтер
+LOG_MAX_BYTES = 5 * 1024 * 1024
+LOG_BACKUP_COUNT = 5
 log_formatter = logging.Formatter(
     '%(asctime)s - %(levelname)s - %(name)s - %(message)s'
 )
-
-# --- Файловый обработчик с ротацией ---
 file_handler = logging.handlers.RotatingFileHandler(
     filename=LOG_FILENAME,
     maxBytes=LOG_MAX_BYTES,
@@ -25,26 +20,56 @@ file_handler = logging.handlers.RotatingFileHandler(
     encoding='utf-8'
 )
 file_handler.setFormatter(log_formatter)
-file_handler.setLevel(logging.INFO) # Пишем в файл INFO и выше
-
-# --- Консольный обработчик ---
+file_handler.setLevel(logging.INFO)
 stream_handler = logging.StreamHandler(sys.stdout)
 stream_handler.setFormatter(log_formatter)
-stream_handler.setLevel(logging.INFO) # В консоль тоже INFO и выше (можно DEBUG для отладки)
-
-# --- Настройка корневого логгера ---
+stream_handler.setLevel(logging.INFO)
 root_logger = logging.getLogger()
-root_logger.setLevel(logging.INFO) # Минимальный уровень для обработки (INFO)
+root_logger.setLevel(logging.INFO)
 root_logger.addHandler(file_handler)
 root_logger.addHandler(stream_handler)
+# --- Конец настройки логирования ---
 
-# --- Завершение базовой настройки логирования ---
+logger = logging.getLogger(__name__)
+logger.info("Logging configured!") # Логгер уже настроен
 
-# Сообщение о старте логгера
-logger = logging.getLogger(__name__) # Получаем логгер для этого файла
-logger.info("Logging configured!")
+# --- Инициализация Sentry ---
+try:
+    # Импортируем Sentry и конфиг ПОСЛЕ настройки логгера
+    import sentry_sdk
+    from sentry_sdk.integrations.aiohttp import AioHttpIntegration
+    from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
+    from src import config # Импортируем конфиг здесь
 
-# Импортируем main ТОЛЬКО ПОСЛЕ настройки логирования
+    if config.SENTRY_DSN:
+        logger.info("Attempting to initialize Sentry SDK...")
+        sentry_sdk.init(
+            dsn=config.SENTRY_DSN,
+            # Включаем интеграции для большего контекста
+            integrations=[
+                AioHttpIntegration(),
+                SqlalchemyIntegration(),
+            ],
+            # Уровень выборки трассировок (для Performance Monitoring, можно начать с 0)
+            traces_sample_rate=0.1,
+            # Отправлять ли данные, которые могут быть личными (IP, User ID)?
+            # Если да, Sentry может автоматически связывать ошибки с пользователями.
+            # Оцените риски согласно вашей политике конфиденциальности.
+            # send_default_pii=True,
+        )
+        logger.info("Sentry SDK initialized successfully.")
+    else:
+        logger.info("Sentry DSN not found, skipping Sentry initialization.")
+
+except ImportError:
+    logger.error("sentry-sdk not installed. Sentry integration skipped.")
+except Exception as e:
+    logger.exception(f"Failed to initialize Sentry SDK: {e}", exc_info=True)
+# --- Конец инициализации Sentry ---
+
+
+# --- Импорт и запуск бота ---
+# Импортируем main ПОСЛЕ инициализации Sentry
 try:
     from src.bot import main
 except ImportError as e:
@@ -54,8 +79,6 @@ except Exception as e:
      logger.critical(f"An unexpected error occurred during initial imports: {e}", exc_info=True)
      sys.exit("Critical: Unexpected error during imports.")
 
-
-# --- Запуск приложения ---
 if __name__ == "__main__":
     logger.info("Initializing application via __main__.py...")
     try:
@@ -63,10 +86,9 @@ if __name__ == "__main__":
     except (KeyboardInterrupt, SystemExit):
         logger.info("Bot stopped by user or system exit.")
     except Exception as e:
-        # Ловим любые другие исключения на верхнем уровне
+        # Sentry должен автоматически перехватить это исключение, если он инициализирован
         logger.critical(f"Unhandled exception at top level: {e}", exc_info=True)
     finally:
         logger.info("Application shutdown sequence initiated.")
-        # Здесь можно добавить код для корректного освобождения ресурсов, если нужно
-        logging.shutdown() # Корректно закрываем обработчики логов
+        logging.shutdown()
         logger.info("Application shutdown complete.")

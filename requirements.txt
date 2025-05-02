@@ -6,4 +6,5 @@ sqlalchemy[asyncio]>=2.0.0
 aiosqlite>=0.17.0
 asyncpg>=0.27.0 # <<< Добавили драйвер PostgreSQL
 pytz>=2023.3 # <<< Добавили для часовых поясов (использовали в alert/service.py)
-# redis>=4.0.0 # <<< Добавили для работы с Redis (использовали в alert/service.py)
+redis>=4.0.0 # <<< Добавили для работы с Redis (использовали в alert/service.py)
+sentry-sdk[aiohttp,sqlalchemy]>=1.40.0 # Или более новая версия
