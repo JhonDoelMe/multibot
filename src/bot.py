@@ -15,7 +15,7 @@ from aiogram.types import Update
 
 from src import config
 # --- Импорт для БД ---
-from src.db.database import initialize_database, async_session_factory
+from src.db.database import initialize_database
 # --- Импорт Middleware ---
 from src.middlewares.db_session import DbSessionMiddleware
 from src.middlewares.rate_limit import ThrottlingMiddleware # <<< Добавили импорт Throttling
