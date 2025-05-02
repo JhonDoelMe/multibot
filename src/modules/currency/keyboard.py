@@ -1,5 +1,6 @@
 # src/modules/currency/keyboard.py
 
+from typing import Optional
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
