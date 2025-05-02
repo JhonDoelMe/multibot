@@ -95,3 +95,4 @@ redeploy_gcp.bat
 secret_value.txt
 bot.log
 run_or_start_bot.sh
+cron_bot.log
