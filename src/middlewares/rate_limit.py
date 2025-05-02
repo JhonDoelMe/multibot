@@ -7,7 +7,6 @@ from typing import Callable, Dict, Any, Awaitable
 from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject, Message, CallbackQuery
 from aiogram.dispatcher.flags import get_flag
-from aiogram.exceptions import CancelHandler  # корректный импорт для aiogram 3.x
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +44,7 @@ class ThrottlingMiddleware(BaseMiddleware):
                 logger.warning(f"User {user_id} throttled. Elapsed: {elapsed:.3f} < Limit: {self.rate_limit}")
                 if isinstance(event, CallbackQuery):
                     await event.answer("Не так швидко! Будь ласка, зачекайте.", show_alert=False)
-                raise CancelHandler()
+                return  # Прерываем выполнение без вызова обработчика
 
         self.user_last_request[user_id] = current_time
         return await handler(event, data)
