@@ -4,19 +4,25 @@ import time
 import logging
 from typing import Callable, Dict, Any, Awaitable
 
-from aiogram import BaseMiddleware # type: ignore
-from aiogram.types import TelegramObject, Message, CallbackQuery # type: ignore
-from aiogram.dispatcher.flags import get_flag # type: ignore
-from aiogram.exceptions import CancelHandler # type: ignore
+from aiogram import BaseMiddleware, Dispatcher
+from aiogram.types import TelegramObject, Message, CallbackQuery
+from aiogram.dispatcher.flags import get_flag
+
+# Универсальный импорт CancelHandler для разных версий aiogram
+try:
+    from aiogram.dispatcher.middlewares import CancelHandler  # aiogram 3.x (новые)
+except ImportError:
+    try:
+        from aiogram.dispatcher.handler import CancelHandler  # aiogram 2.x
+    except ImportError:
+        CancelHandler = Dispatcher.CancelHandler  # aiogram 3.x (последние)
 
 logger = logging.getLogger(__name__)
 
-# Простой троттлинг Middleware (ограничение частоты)
 class ThrottlingMiddleware(BaseMiddleware):
-    def __init__(self, default_rate: float = 0.5): # Лимит по умолчанию: 0.5 сек между запросами
+    def __init__(self, default_rate: float = 0.5):
         super().__init__()
         self.rate_limit = default_rate
-        # Словарь для хранения времени последнего запроса пользователя {user_id: timestamp}
         self.user_last_request: Dict[int, float] = {}
 
     async def __call__(
@@ -25,20 +31,16 @@ class ThrottlingMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: Dict[str, Any],
     ) -> Any:
-
-        # Троттлинг применяется только к сообщениям и колбэкам от реальных пользователей
         if not isinstance(event, (Message, CallbackQuery)):
             return await handler(event, data)
 
         user = event.from_user
-        if not user: # Не должно происходить, но на всякий случай
-             return await handler(event, data)
+        if not user:
+            return await handler(event, data)
 
         user_id = user.id
-        current_time = time.monotonic() # Используем monotonic для измерения интервалов
+        current_time = time.monotonic()
 
-        # Проверяем флаг 'no_throttle', чтобы можно было отключить троттлинг для отдельных хэндлеров
-        # (пока не используется, но полезно для будущего)
         if get_flag(data, "no_throttle"):
             logger.debug(f"Throttling skipped for user {user_id} due to 'no_throttle' flag.")
             return await handler(event, data)
@@ -49,14 +51,9 @@ class ThrottlingMiddleware(BaseMiddleware):
             elapsed = current_time - last_request_time
             if elapsed < self.rate_limit:
                 logger.warning(f"User {user_id} throttled. Elapsed: {elapsed:.3f} < Limit: {self.rate_limit}")
-                # Можно опционально ответить пользователю (но аккуратно с CallbackQuery)
                 if isinstance(event, CallbackQuery):
-                     await event.answer("Не так швидко! Будь ласка, зачекайте.", show_alert=False) # Краткое уведомление
-                # Отменяем дальнейшую обработку этого события
+                    await event.answer("Не так швидко! Будь ласка, зачекайте.", show_alert=False)
                 raise CancelHandler()
-        else:
-             logger.debug(f"First request or limit passed for user {user_id}.")
 
-        # Записываем время текущего запроса и выполняем хэндлер
         self.user_last_request[user_id] = current_time
         return await handler(event, data)
