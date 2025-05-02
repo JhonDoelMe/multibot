@@ -1,50 +1,49 @@
 # src/modules/weather/keyboard.py
 
+from typing import Optional
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-# Callback data префиксы и константы
 WEATHER_PREFIX = "weather"
-# Основные действия - переименовали для ясности
-CALLBACK_WEATHER_OTHER_CITY = f"{WEATHER_PREFIX}:other" # Запросить другой город
-CALLBACK_WEATHER_REFRESH = f"{WEATHER_PREFIX}:refresh" # Обновить погоду для ТЕКУЩЕГО (отображенного) города
-CALLBACK_WEATHER_BACK_TO_MAIN = f"{WEATHER_PREFIX}:back_main" # Возврат именно из диалога ввода города
-
-# Подтверждение сохранения города
+CALLBACK_WEATHER_OTHER_CITY = f"{WEATHER_PREFIX}:other"
+CALLBACK_WEATHER_REFRESH = f"{WEATHER_PREFIX}:refresh"
+CALLBACK_WEATHER_BACK_TO_MAIN = f"{WEATHER_PREFIX}:back_main"
 CALLBACK_WEATHER_SAVE_CITY_YES = f"{WEATHER_PREFIX}:save_yes"
 CALLBACK_WEATHER_SAVE_CITY_NO = f"{WEATHER_PREFIX}:save_no"
+# --- Новые колбэки для прогноза ---
+CALLBACK_WEATHER_FORECAST_5D = f"{WEATHER_PREFIX}:forecast5"
+CALLBACK_WEATHER_SHOW_CURRENT = f"{WEATHER_PREFIX}:show_current"
 
-# Клавиатура БОЛЬШЕ НЕ НУЖНА, показываем погоду сразу
-# def get_city_confirmation_keyboard() -> InlineKeyboardMarkup: ...
 
 def get_save_city_keyboard() -> InlineKeyboardMarkup:
-    """ Клавиатура с вопросом о сохранении города (без кнопки Назад). """
-    builder = InlineKeyboardBuilder()
-    builder.row(
-        InlineKeyboardButton(text="💾 Так, зберегти", callback_data=CALLBACK_WEATHER_SAVE_CITY_YES),
-        InlineKeyboardButton(text="❌ Ні", callback_data=CALLBACK_WEATHER_SAVE_CITY_NO)
-    )
-    # Убрали кнопку Назад
-    return builder.as_markup()
-
+    # ... (без изменений) ...
+     builder = InlineKeyboardBuilder(); builder.row(InlineKeyboardButton(text="💾 Так, зберегти", callback_data=CALLBACK_WEATHER_SAVE_CITY_YES), InlineKeyboardButton(text="❌ Ні", callback_data=CALLBACK_WEATHER_SAVE_CITY_NO)); return builder.as_markup()
 
 def get_weather_actions_keyboard() -> InlineKeyboardMarkup:
-    """
-    Возвращает инлайн-клавиатуру с действиями ПОСЛЕ показа погоды.
-    Кнопки: Другой город / Обновить
-    """
+    """ Клавиатура с действиями ПОСЛЕ показа погоды: Другой город / Обновить / Прогноз 5д """
     builder = InlineKeyboardBuilder()
+    # Добавляем кнопку прогноза в первый ряд
     builder.row(
         InlineKeyboardButton(text="🏙️ Інше місто", callback_data=CALLBACK_WEATHER_OTHER_CITY),
         InlineKeyboardButton(text="🔄 Оновити", callback_data=CALLBACK_WEATHER_REFRESH)
     )
-    # Убрали кнопку Назад в меню
+    # Кнопка прогноза во втором ряду
+    builder.row(
+         InlineKeyboardButton(text="📅 Прогноз на 5 днів", callback_data=CALLBACK_WEATHER_FORECAST_5D)
+    )
     return builder.as_markup()
 
 def get_weather_enter_city_back_keyboard() -> InlineKeyboardMarkup:
-     """ Клавиатура для экрана ввода города (только Назад) """
-     builder = InlineKeyboardBuilder()
-     builder.row(
-         InlineKeyboardButton(text="⬅️ Назад в меню", callback_data=CALLBACK_WEATHER_BACK_TO_MAIN)
-     )
-     return builder.as_markup()
+    # ... (без изменений) ...
+     builder = InlineKeyboardBuilder(); builder.row(InlineKeyboardButton(text="⬅️ Назад в меню", callback_data=CALLBACK_WEATHER_BACK_TO_MAIN)); return builder.as_markup()
+
+# --- Новая клавиатура для прогноза ---
+def get_forecast_keyboard() -> InlineKeyboardMarkup:
+    """ Клавиатура после показа прогноза: Назад к текущей погоде """
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="⬅️ До поточної погоди", callback_data=CALLBACK_WEATHER_SHOW_CURRENT)
+    )
+    # Можно добавить кнопку "Назад в меню", если нужно
+    # builder.row(InlineKeyboardButton(text="⬅️ Назад в меню", callback_data=CALLBACK_WEATHER_BACK_TO_MAIN))
+    return builder.as_markup()
