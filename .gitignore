@@ -93,3 +93,5 @@ src/db/local_database.db
 db_url.txt
 redeploy_gcp.bat
 secret_value.txt
+bot.log
+run_or_start_bot.sh
