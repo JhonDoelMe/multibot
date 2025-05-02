@@ -4,10 +4,10 @@ import time
 import logging
 from typing import Callable, Dict, Any, Awaitable
 
-from aiogram import BaseMiddleware
-from aiogram.types import TelegramObject, Message, CallbackQuery
-from aiogram.dispatcher.flags import get_flag
-from aiogram.dispatcher.handler import CancelHandler # Для отмены обработки
+from aiogram import BaseMiddleware # type: ignore
+from aiogram.types import TelegramObject, Message, CallbackQuery # type: ignore
+from aiogram.dispatcher.flags import get_flag # type: ignore
+from aiogram.exceptions import CancelHandler # type: ignore
 
 logger = logging.getLogger(__name__)
 
