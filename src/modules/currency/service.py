@@ -22,7 +22,7 @@ INITIAL_DELAY = config.INITIAL_DELAY
 # Целевые валюты
 TARGET_CURRENCIES = {"USD", "EUR"}
 
-@cached(ttl=config.CACHE_TTL_CURRENCY, key_builder=lambda *args, **kwargs: f"rates:{'cash' if args[2] else 'noncash'}", namespace="currency")
+@cached(ttl=config.CACHE_TTL_CURRENCY, key_builder=lambda *args, **kwargs: f"rates:{'cash' if kwargs.get('cash', True) else 'noncash'}", namespace="currency")
 async def get_pb_exchange_rates(bot: Bot, cash: bool = True) -> Optional[List[Dict[str, Any]]]:
     """ Получает курсы валют ПриватБанка (наличные или безналичные). """
     logger.info(f"Requesting PB {'cash' if cash else 'noncash'} rates...")
