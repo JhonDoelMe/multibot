@@ -7,6 +7,7 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime
 from aiogram import Bot
 import pytz
+from aiocache import cached
 
 from src import config
 
@@ -33,6 +34,7 @@ ALERT_TYPE_EMOJI = {
     "UNKNOWN": "❓"
 }
 
+@cached(ttl=config.CACHE_TTL_ALERTS, key="alerts", namespace="alert")
 async def get_active_alerts(bot: Bot) -> Optional[List[Dict[str, Any]]]:
     """
     Получает список активных тревог с API UkraineAlarm.

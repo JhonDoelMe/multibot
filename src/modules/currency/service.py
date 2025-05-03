@@ -5,6 +5,7 @@ import aiohttp
 import asyncio
 from typing import Optional, Dict, Any, List
 from aiogram import Bot
+from aiocache import cached
 
 from src import config
 
@@ -21,6 +22,7 @@ INITIAL_DELAY = config.INITIAL_DELAY
 # Целевые валюты
 TARGET_CURRENCIES = {"USD", "EUR"}
 
+@cached(ttl=config.CACHE_TTL_CURRENCY, key_builder=lambda *args, **kwargs: f"rates:{'cash' if args[1] else 'noncash'}", namespace="currency")
 async def get_pb_exchange_rates(bot: Bot, cash: bool = True) -> Optional[List[Dict[str, Any]]]:
     """ Получает курсы валют ПриватБанка (наличные или безналичные). """
     logger.info(f"Requesting PB {'cash' if cash else 'noncash'} rates...")
@@ -43,7 +45,7 @@ async def get_pb_exchange_rates(bot: Bot, cash: bool = True) -> Optional[List[Di
                             return filtered_data
                         except aiohttp.ContentTypeError:
                             logger.error(f"Attempt {attempt + 1}: Failed to decode JSON from PB. Response: {await response.text()}")
-                        return None
+                            return None
                     elif response.status == 429:
                         last_exception = aiohttp.ClientResponseError(
                             response.request_info, response.history,

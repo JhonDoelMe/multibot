@@ -7,6 +7,7 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime, timedelta
 import pytz
 from aiogram import Bot
+from aiocache import cached
 
 from src import config
 
@@ -34,6 +35,7 @@ ICON_CODE_TO_EMOJI = {
     "50d": "🌫️", "50n": "🌫️",  # mist
 }
 
+@cached(ttl=config.CACHE_TTL_WEATHER, key_builder=lambda *args, **kwargs: f"weather:city:{args[1].lower()}", namespace="weather")
 async def get_weather_data(bot: Bot, city_name: str) -> Optional[Dict[str, Any]]:
     """ Получает данные о погоде. """
     if not config.WEATHER_API_KEY:
@@ -61,7 +63,7 @@ async def get_weather_data(bot: Bot, city_name: str) -> Optional[Dict[str, Any]]
                             return data
                         except aiohttp.ContentTypeError:
                             logger.error(f"Attempt {attempt + 1}: Failed to decode JSON from OWM. Response: {await response.text()}")
-                        return {"cod": 500, "message": "Invalid JSON response"}
+                            return {"cod": 500, "message": "Invalid JSON response"}
                     elif response.status == 404:
                         logger.warning(f"Attempt {attempt + 1}: City '{city_name}' not found by OWM (404).")
                         return {"cod": 404, "message": "City not found"}
@@ -105,6 +107,7 @@ async def get_weather_data(bot: Bot, city_name: str) -> Optional[Dict[str, Any]]
                     return {"cod": 500, "message": "Failed after multiple retries"}
     return {"cod": 500, "message": "Failed after all weather retries"}
 
+@cached(ttl=config.CACHE_TTL_WEATHER, key_builder=lambda *args, **kwargs: f"weather:coords:{args[1]:.4f}:{args[2]:.4f}", namespace="weather")
 async def get_weather_data_by_coords(bot: Bot, latitude: float, longitude: float) -> Optional[Dict[str, Any]]:
     """ Получает данные о погоде по координатам. """
     if not config.WEATHER_API_KEY:
@@ -133,7 +136,7 @@ async def get_weather_data_by_coords(bot: Bot, latitude: float, longitude: float
                             return data
                         except aiohttp.ContentTypeError:
                             logger.error(f"Attempt {attempt + 1}: Failed to decode JSON from OWM. Response: {await response.text()}")
-                        return {"cod": 500, "message": "Invalid JSON response"}
+                            return {"cod": 500, "message": "Invalid JSON response"}
                     elif response.status == 401:
                         logger.error(f"Attempt {attempt + 1}: Invalid OWM API key (401).")
                         return {"cod": 401, "message": "Invalid API key"}
@@ -157,7 +160,6 @@ async def get_weather_data_by_coords(bot: Bot, latitude: float, longitude: float
             except Exception as e:
                 logger.exception(f"Attempt {attempt + 1}: An unexpected error occurred fetching weather by coords: {e}", exc_info=True)
                 return {"cod": 500, "message": "Internal processing error"}
-
             if attempt < MAX_RETRIES - 1:
                 delay = INITIAL_DELAY * (2 ** attempt)
                 logger.info(f"Waiting {delay} seconds before next weather retry...")
@@ -174,6 +176,7 @@ async def get_weather_data_by_coords(bot: Bot, latitude: float, longitude: float
                     return {"cod": 500, "message": "Failed after multiple retries"}
     return {"cod": 500, "message": "Failed after all weather retries"}
 
+@cached(ttl=config.CACHE_TTL_WEATHER, key_builder=lambda *args, **kwargs: f"forecast:city:{args[1].lower()}", namespace="weather")
 async def get_5day_forecast(bot: Bot, city_name: str) -> Optional[Dict[str, Any]]:
     """ Получает прогноз на 5 дней. """
     if not config.WEATHER_API_KEY:
@@ -201,7 +204,7 @@ async def get_5day_forecast(bot: Bot, city_name: str) -> Optional[Dict[str, Any]
                             return data
                         except aiohttp.ContentTypeError:
                             logger.error(f"Attempt {attempt + 1}: Failed to decode JSON from OWM. Response: {await response.text()}")
-                        return {"cod": "500", "message": "Invalid JSON response"}
+                            return {"cod": "500", "message": "Invalid JSON response"}
                     elif response.status == 404:
                         logger.warning(f"Attempt {attempt + 1}: City '{city_name}' not found by OWM (404).")
                         return {"cod": "404", "message": "City not found"}

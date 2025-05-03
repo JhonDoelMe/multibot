@@ -31,6 +31,13 @@ MAX_RETRIES = 3  # Максимальное количество попыток 
 INITIAL_DELAY = 1  # Начальная задержка для ретраев в секундах
 API_REQUEST_TIMEOUT = 15  # Таймаут для HTTP-запросов к API в секундах
 
+# Настройки кэширования (aiocache)
+CACHE_BACKEND = os.getenv("CACHE_BACKEND", "memory")  # "memory" или "redis"
+CACHE_REDIS_URL = os.getenv("CACHE_REDIS_URL", "redis://localhost:6379/0")
+CACHE_TTL_ALERTS = 60  # TTL для кэша тревог (1 минута)
+CACHE_TTL_WEATHER = 600  # TTL для кэша погоды (10 минут)
+CACHE_TTL_CURRENCY = 3600  # TTL для кэша валют (1 час)
+
 # --- Sentry DSN ---
 SENTRY_DSN = os.getenv("SENTRY_DSN") # <<< ДОБАВЛЕНО
 
