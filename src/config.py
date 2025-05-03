@@ -14,6 +14,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 # --- API Ключи и Токены ---
 WEATHER_API_KEY = os.getenv("WEATHER_API_KEY")
 UKRAINEALARM_API_TOKEN = os.getenv("UKRAINEALARM_API_TOKEN")
+ALERTS_IN_UA_TOKEN = os.getenv("ALERTS_IN_UA_TOKEN") # <<< ДОБАВЛЕНО
 
 # --- Настройки Вебхука ---
 WEBHOOK_PATH = os.getenv("WEBHOOK_PATH")
@@ -34,7 +35,8 @@ API_REQUEST_TIMEOUT = 15  # Таймаут для HTTP-запросов к API �
 # Настройки кэширования (aiocache)
 CACHE_BACKEND = os.getenv("CACHE_BACKEND", "memory")  # "memory" или "redis"
 CACHE_REDIS_URL = os.getenv("CACHE_REDIS_URL", "redis://localhost:6379/0")
-CACHE_TTL_ALERTS = 60  # TTL для кэша тревог (1 минута)
+CACHE_TTL_ALERTS = 60  # TTL для кэша тревог (1 минута) - UkraineAlarm
+CACHE_TTL_ALERTS_BACKUP = 90 # TTL для резервного кэша тревог (1.5 минуты) <<< ДОБАВЛЕНО
 CACHE_TTL_WEATHER = 600  # TTL для кэша погоды (10 минут)
 CACHE_TTL_CURRENCY = 3600  # TTL для кэша валют (1 час)
 
@@ -60,4 +62,23 @@ if SENTRY_DSN:
 else:
     logger.warning("SENTRY_DSN is not set. Sentry integration disabled.")
 
-# (Логирование для ключей API и DB остается без изменений)
+# --- Логирование статуса API ключей и токенов ---
+if WEATHER_API_KEY:
+    logger.info("WEATHER_API_KEY loaded.")
+else:
+    logger.warning("WEATHER_API_KEY not set.")
+if UKRAINEALARM_API_TOKEN:
+    logger.info("UKRAINEALARM_API_TOKEN loaded.")
+else:
+    logger.warning("UKRAINEALARM_API_TOKEN not set (Primary alerts may fail).")
+if ALERTS_IN_UA_TOKEN: # <<< ДОБАВЛЕНО
+    logger.info("ALERTS_IN_UA_TOKEN loaded.") # <<< ДОБАВЛЕНО
+else: # <<< ДОБАВЛЕНО
+    logger.warning("ALERTS_IN_UA_TOKEN not set (Backup alerts will fail).") # <<< ДОБАВЛЕНО
+if DATABASE_URL:
+    # Логируем только часть URL без пароля, если он есть
+    db_log_url = DATABASE_URL.split('@')[-1] if '@' in DATABASE_URL else DATABASE_URL
+    logger.info(f"DATABASE_URL loaded (connecting to: ...@{db_log_url}).")
+else:
+    logger.warning("DATABASE_URL not set. Database features disabled.")
+logger.info(f"Cache backend: {CACHE_BACKEND}, Redis URL: {CACHE_REDIS_URL if CACHE_BACKEND == 'redis' else 'N/A'}")

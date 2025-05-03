@@ -4,6 +4,7 @@ import asyncio
 import logging
 import sys
 from contextlib import suppress
+import aiohttp # <<< Добавлен импорт aiohttp
 
 from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
@@ -20,9 +21,11 @@ from src.db.database import initialize_database
 from src.middlewares.db_session import DbSessionMiddleware
 from src.middlewares.rate_limit import ThrottlingMiddleware
 
+# Импортируем роутеры
 from src.modules.weather import handlers as weather_handlers
 from src.modules.currency import handlers as currency_handlers
 from src.modules.alert import handlers as alert_handlers
+from src.modules.alert_backup import handlers as alert_backup_handlers # <<< ДОБАВЛЕНО
 from src.handlers import common as common_handlers
 
 logger = logging.getLogger(__name__)
@@ -31,12 +34,17 @@ async def on_startup(bot: Bot):
     logger.info("Executing on_startup actions...")
     if not config.RUN_WITH_WEBHOOK:
         logger.info("Running in polling mode, deleting potential webhook...")
-        await bot.delete_webhook(drop_pending_updates=True)
-        logger.info("Webhook deleted.")
+        try:
+            await bot.delete_webhook(drop_pending_updates=True)
+            logger.info("Webhook deleted.")
+        except TelegramNetworkError as e:
+            logger.error(f"Error deleting webhook: {e}")
+
 
 async def on_shutdown(bot: Bot):
     logger.warning("Executing on_shutdown actions...")
     logger.warning("Bot shutdown complete.")
+
 
 async def main() -> None:
     logger.info("Starting main() function.")
@@ -52,9 +60,10 @@ async def main() -> None:
     logger.info("Initializing Aiogram components...")
     storage = MemoryStorage()
     default_props = DefaultBotProperties(parse_mode=ParseMode.HTML)
-    
+
     # Настройка сессии с таймаутом
-    session = AiohttpSession(timeout=30)
+    # Используем ClientTimeout из aiohttp
+    session = AiohttpSession(timeout=aiohttp.ClientTimeout(total=30, connect=10))
     try:
         bot = Bot(token=config.BOT_TOKEN, default=default_props, session=session)
         logger.info("Aiogram Bot initialized with custom session.")
@@ -78,7 +87,8 @@ async def main() -> None:
     dp.include_router(weather_handlers.router)
     dp.include_router(currency_handlers.router)
     dp.include_router(alert_handlers.router)
-    dp.include_router(common_handlers.router)
+    dp.include_router(alert_backup_handlers.router) # <<< ДОБАВЛЕНО
+    dp.include_router(common_handlers.router) # Общий лучше регистрировать последним
     logger.info("All routers registered.")
 
     # --- Call on_startup ---
@@ -93,7 +103,7 @@ async def main() -> None:
             app["bot"] = bot
             app["dp"] = dp
             logger.info("aiohttp Application created for webhook.")
-            webhook_requests_handler = SimpleRequestHandler(dispatcher=dp, bot=bot, secret_token=config.BOT_TOKEN[:10])
+            webhook_requests_handler = SimpleRequestHandler(dispatcher=dp, bot=bot, secret_token=config.BOT_TOKEN[:10]) # Используем часть токена как секрет
             if config.WEBHOOK_PATH:
                 webhook_requests_handler.register(app, path=config.WEBHOOK_PATH)
                 logger.info(f"Registered webhook handler at path: {config.WEBHOOK_PATH}")
@@ -109,26 +119,39 @@ async def main() -> None:
             await site.start()
             logger.info("Web server started successfully.")
             logger.info("Starting infinite wait loop for web server...")
-            await asyncio.Event().wait()
+            await asyncio.Event().wait() # Бесконечное ожидание для веб-сервера
             logger.warning("Infinite wait loop finished (UNEXPECTED!).")
         else:
             # --- Polling Mode ---
             logger.warning("Starting bot in POLLING mode...")
             logger.info("Starting polling...")
-            max_retries = 5
+            max_retries = 5 # Макс попыток рестарта поллинга
+            retry_delay = 2 # Начальная задержка в секундах
+
             for attempt in range(max_retries):
                 try:
-                    await dp.start_polling(bot)
-                    break
+                    # Убрали явное добавление таймаута в start_polling, так как он настроен в сессии
+                    await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+                    break # Если start_polling завершился штатно (например, по KeyboardInterrupt), выходим
                 except TelegramNetworkError as e:
-                    logger.error(f"TelegramNetworkError during polling (attempt {attempt + 1}/{max_retries}): {str(e)} ({repr(e)})")
+                    logger.error(f"TelegramNetworkError during polling (attempt {attempt + 1}/{max_retries}): {e}")
                     if attempt < max_retries - 1:
-                        delay = 2 * (2 ** attempt)  # Экспоненциальная задержка: 2, 4, 8, 16, 32 сек
-                        logger.info(f"Waiting {delay} seconds before retrying...")
-                        await asyncio.sleep(delay)
+                        logger.info(f"Waiting {retry_delay} seconds before retrying polling...")
+                        await asyncio.sleep(retry_delay)
+                        retry_delay *= 2 # Увеличиваем задержку экспоненциально
                     else:
-                        logger.critical("All polling retries failed.")
-                        raise
+                        logger.critical("All polling retries failed. Stopping bot.")
+                        # Можно добавить отправку уведомления администратору здесь
+                except Exception as e:
+                     logger.exception(f"Unhandled exception during polling: {e}", exc_info=True)
+                     # Можно добавить отправку уведомления администратору
+                     # Решаем, нужно ли пытаться перезапустить после неизвестной ошибки
+                     if attempt < max_retries - 1:
+                          logger.info(f"Waiting {retry_delay} seconds before retrying polling...")
+                          await asyncio.sleep(retry_delay)
+                          retry_delay *= 2
+                     else:
+                          logger.critical("Stopping bot after unhandled exception in polling.")
     finally:
         logger.warning("Closing bot session (in finally block)...")
         await bot.session.close()
