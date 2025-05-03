@@ -131,7 +131,11 @@ def format_weather_message(weather_data: Dict[str, Any], city_display_name: str)
         description_uk=weather_info.get("description", "невідомо").capitalize(); icon_code=weather_info.get("icon")
         icon_emoji=ICON_CODE_TO_EMOJI.get(icon_code, "❓")
         def deg_to_compass(num):
-            if num is None: return ""; try: val=int((float(num)/22.5)+.5); arr=["Пн","Пн-Пн-Сх","Пн-Сх","Сх-Пн-Сх","Сх","Сх-Пд-Сх","Пд-Сх","Пд-Пд-Сх","Пд","Пд-Пд-Зх","Пд-Зх","Зх-Пд-Зх","Зх","Зх-Пн-Зх","Пн-Зх","Пн-Пн-Зх"]; return arr[(val%16)]
+            if num is None: return ""; 
+            try: 
+                val=int((float(num)/22.5)+.5); 
+                arr=["Пн","Пн-Пн-Сх","Пн-Сх","Сх-Пн-Сх","Сх","Сх-Пд-Сх","Пд-Сх","Пд-Пд-Сх","Пд","Пд-Пд-Зх","Пд-Зх","Зх-Пд-Зх","Зх","Зх-Пн-Зх","Пн-Зх","Пн-Пн-Зх"]; 
+                return arr[(val%16)]
             except (ValueError,TypeError): return ""
         wind_direction=deg_to_compass(wind_deg); display_name_formatted=city_display_name.capitalize()
         message_lines=[f"<b>Погода в м. {display_name_formatted}:</b>\n", f"{icon_emoji} {description_uk}", f"🌡️ Температура: {temp:+.1f}°C (відчувається як {feels_like:+.1f}°C)" if temp is not None and feels_like is not None else "...", f"💧 Вологість: {humidity}%" if humidity is not None else "...", f"💨 Вітер: {wind_speed:.1f} м/с {wind_direction}" if wind_speed is not None else "...", f"🧭 Тиск: {pressure_mmhg} мм рт.ст." if pressure_mmhg != "N/A" else "...", f"☁️ Хмарність: {clouds_percent}%" if clouds_percent != "N/A" else "..."]
