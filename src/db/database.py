@@ -1,4 +1,4 @@
-# src/db/database.py (версия без print)
+# src/db/database.py (без print)
 
 import logging
 import sys
@@ -23,36 +23,35 @@ class Base(AsyncAttrs, DeclarativeBase):
     pass
 
 async def initialize_database() -> Tuple[bool, Optional[async_sessionmaker[AsyncSession]]]:
-    logger.info("Attempting database initialization...")
+    logger.info("Attempting database initialization...") # Оставили лог
 
     if not DATABASE_URL:
         logger.error("DATABASE_URL is not set. Database features disabled.")
         return False, None
 
-    logger.info(f"Initializing database connection for: {DATABASE_URL.split('@')[-1]}")
+    logger.info(f"Initializing database connection for: {DATABASE_URL.split('@')[-1]}") # Оставили лог
 
     temp_engine = None
     temp_session_factory = None
     try:
-        logger.info("Creating async engine...")
+        logger.info("Creating async engine...") # Оставили лог
         temp_engine = create_async_engine(DATABASE_URL, echo=False, pool_pre_ping=True)
-        logger.info("Database engine created.")
+        logger.info("Database engine created.") # Оставили лог
 
-        logger.info("Creating session factory...")
+        logger.info("Creating session factory...") # Оставили лог
         temp_session_factory = async_sessionmaker(temp_engine, expire_on_commit=False)
-        logger.info("Database session factory created.")
+        logger.info("Database session factory created.") # Оставили лог
 
         async with temp_engine.begin() as conn:
-            logger.info("Creating/checking database tables...")
+            logger.info("Creating/checking database tables...") # Оставили лог
             await conn.run_sync(Base.metadata.create_all)
-            logger.info("Database tables checked/created successfully.")
+            logger.info("Database tables checked/created successfully.") # Оставили лог
 
-        logger.info("Database initialization successful.")
+        logger.info("Database initialization successful.") # Оставили лог
         return True, temp_session_factory
 
     except Exception as e:
-        logger.exception(f"Failed to initialize database or connect: {e}", exc_info=True)
-        # Движок и фабрика не были успешно созданы или присвоены
+        logger.exception(f"Failed to initialize database or connect: {e}", exc_info=True) # Оставили лог ошибки
         return False, None
 
-# Удалили get_db_session, так как он не нужен при передаче фабрики в Middleware
+# Удалили get_db_session
