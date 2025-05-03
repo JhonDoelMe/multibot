@@ -63,7 +63,7 @@ async def main() -> None:
 
     # Настройка сессии с таймаутом
     # Используем ClientTimeout из aiohttp
-    session = AiohttpSession(timeout=aiohttp.ClientTimeout(total=30, connect=10))
+    session = AiohttpSession()
     try:
         bot = Bot(token=config.BOT_TOKEN, default=default_props, session=session)
         logger.info("Aiogram Bot initialized with custom session.")

@@ -48,48 +48,49 @@ async def get_backup_alerts(bot: Bot) -> Optional[List[Dict[str, Any]]]:
             # Используем сессию из aiohttp напрямую
             async with aiohttp.ClientSession() as session:
                 async with session.get(ALERTS_IN_UA_API_URL, headers=headers, timeout=config.API_REQUEST_TIMEOUT) as response:
+                    # <<< ДОБАВЛЕНО: Логирование полного ответа >>>
+                    response_text = await response.text()
+                    logger.debug(f"Alerts.in.ua raw response (status {response.status}): {response_text[:1000]}...") # Логируем начало ответа
+
                     if response.status == 200:
                         try:
-                            data = await response.json()
+                            # Пытаемся парсить JSON из уже прочитанного текста
+                            data = response.json(loads=__import__('json').loads)
+                            logger.debug(f"Alerts.in.ua response JSON: {data}") # Логируем весь JSON
                             # API возвращает {"alerts": [...]}
                             alerts = data.get("alerts", [])
-                            logger.debug(f"Alerts.in.ua response: {len(alerts)} alerts")
+                            logger.debug(f"Extracted {len(alerts)} alerts from backup API")
                             return alerts # Возвращаем список
-                        except aiohttp.ContentTypeError:
-                            logger.error(f"Attempt {attempt + 1}: Failed to decode JSON from Alerts.in.ua. Response: {await response.text()}")
+                        except Exception as json_err:
+                            logger.error(f"Attempt {attempt + 1}: Failed to decode JSON from Alerts.in.ua. Error: {json_err}. Response: {response_text[:500]}")
                             return {"status": "error", "message": "Невірний формат JSON відповіді від резервного API"}
-                        except Exception as json_err: # Обработка других ошибок парсинга JSON
-                             logger.error(f"Attempt {attempt + 1}: Error parsing JSON from Alerts.in.ua: {json_err}. Response: {await response.text()[:200]}")
-                             return {"status": "error", "message": "Помилка обробки відповіді резервного API"}
-
+                    # <<< Остальная логика обработки ошибок статуса >>>
                     elif response.status == 401:
-                        error_text = await response.text()
+                        error_text = response_text
                         logger.error(f"Attempt {attempt + 1}: Invalid Alerts.in.ua API token (401). Response: {error_text[:200]}")
                         return {"status": "error", "message": f"Невірний токен резервного API"}
-                    elif response.status == 404: # API может вернуть 404 если нет активных тревог или неверный URL
-                         error_text = await response.text()
+                    elif response.status == 404:
+                         error_text = response_text
                          logger.warning(f"Attempt {attempt + 1}: Received 404 from Alerts.in.ua. Response: {error_text[:200]}")
-                         # Предполагаем, что 404 означает отсутствие тревог, но лучше уточнить документацию API
-                         # Если 404 - это "нет тревог", то вернуть пустой список: return []
-                         # Пока оставим как ошибку:
                          return {"status": "error", "message": f"Помилка резервного API {response.status} (можливо, не знайдено)"}
                     elif response.status == 429:
-                        last_exception = aiohttp.ClientResponseError(
-                            response.request_info, response.history,
-                            status=429, message="Rate limit exceeded"
-                        )
-                        logger.warning(f"Attempt {attempt + 1}: Alerts.in.ua RateLimit Error (429). Retrying...")
+                         last_exception = aiohttp.ClientResponseError(
+                             response.request_info, response.history,
+                             status=429, message="Rate limit exceeded"
+                         )
+                         logger.warning(f"Attempt {attempt + 1}: Alerts.in.ua RateLimit Error (429). Retrying...")
                     elif response.status >= 500:
-                        last_exception = aiohttp.ClientResponseError(
-                            response.request_info, response.history,
-                            status=response.status, message=f"Server error {response.status}"
-                        )
-                        logger.warning(f"Attempt {attempt + 1}: Alerts.in.ua Server Error {response.status}. Retrying...")
+                         last_exception = aiohttp.ClientResponseError(
+                             response.request_info, response.history,
+                             status=response.status, message=f"Server error {response.status}"
+                         )
+                         logger.warning(f"Attempt {attempt + 1}: Alerts.in.ua Server Error {response.status}. Retrying...")
                     else:
-                        error_text = await response.text()
-                        logger.error(f"Attempt {attempt + 1}: Alerts.in.ua Error {response.status}. Response: {error_text[:200]}")
-                        return {"status": "error", "message": f"Помилка резервного API {response.status}"}
+                         error_text = response_text
+                         logger.error(f"Attempt {attempt + 1}: Alerts.in.ua Error {response.status}. Response: {error_text[:200]}")
+                         return {"status": "error", "message": f"Помилка резервного API {response.status}"}
 
+        # <<< Обработка исключений и ретраи >>>
         except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
             last_exception = e
             logger.warning(f"Attempt {attempt + 1}: Network error connecting to Alerts.in.ua: {e}. Retrying...")
@@ -102,15 +103,16 @@ async def get_backup_alerts(bot: Bot) -> Optional[List[Dict[str, Any]]]:
             logger.info(f"Waiting {delay} seconds before next backup alert retry...")
             await asyncio.sleep(delay)
         else:
-            logger.error(f"All {config.MAX_RETRIES} attempts failed for backup alerts. Last error: {last_exception!r}")
-            if isinstance(last_exception, aiohttp.ClientResponseError):
-                return {"status": "error", "message": f"Помилка резервного API {last_exception.status} після ретраїв"}
-            elif isinstance(last_exception, aiohttp.ClientConnectorError):
-                return {"status": "error", "message": "Помилка мережі резервного API після ретраїв"}
-            elif isinstance(last_exception, asyncio.TimeoutError):
-                return {"status": "error", "message": "Таймаут резервного API після ретраїв"}
-            else:
-                return {"status": "error", "message": "Не вдалося отримати резервні дані після ретраїв"}
+            # <<< Логика после всех ретраев >>>
+             logger.error(f"All {config.MAX_RETRIES} attempts failed for backup alerts. Last error: {last_exception!r}")
+             if isinstance(last_exception, aiohttp.ClientResponseError):
+                 return {"status": "error", "message": f"Помилка резервного API {last_exception.status} після ретраїв"}
+             elif isinstance(last_exception, aiohttp.ClientConnectorError):
+                 return {"status": "error", "message": "Помилка мережі резервного API після ретраїв"}
+             elif isinstance(last_exception, asyncio.TimeoutError):
+                 return {"status": "error", "message": "Таймаут резервного API після ретраїв"}
+             else:
+                 return {"status": "error", "message": "Не вдалося отримати резервні дані після ретраїв"}
     return {"status": "error", "message": "Не вдалося отримати резервні дані після всіх ретраїв"}
 
 
