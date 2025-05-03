@@ -18,8 +18,8 @@ OWM_FORECAST_URL = "https://api.openweathermap.org/data/2.5/forecast"
 
 # Часовой пояс и параметры Retry
 TZ_KYIV = pytz.timezone('Europe/Kyiv')
-MAX_RETRIES = 3
-INITIAL_DELAY = 1  # Секунда
+MAX_RETRIES = config.MAX_RETRIES
+INITIAL_DELAY = config.INITIAL_DELAY
 
 # Словарь для эмодзи по коду иконки OpenWeatherMap
 ICON_CODE_TO_EMOJI = {
@@ -53,7 +53,7 @@ async def get_weather_data(bot: Bot, city_name: str) -> Optional[Dict[str, Any]]
         for attempt in range(MAX_RETRIES):
             try:
                 logger.debug(f"Attempt {attempt + 1}/{MAX_RETRIES} to fetch weather for {city_name}")
-                async with session.get(api_url, params=params, timeout=10) as response:
+                async with session.get(api_url, params=params, timeout=config.API_REQUEST_TIMEOUT) as response:
                     if response.status == 200:
                         try:
                             data = await response.json()
@@ -61,7 +61,7 @@ async def get_weather_data(bot: Bot, city_name: str) -> Optional[Dict[str, Any]]
                             return data
                         except aiohttp.ContentTypeError:
                             logger.error(f"Attempt {attempt + 1}: Failed to decode JSON from OWM. Response: {await response.text()}")
-                            return {"cod": 500, "message": "Invalid JSON response"}
+                        return {"cod": 500, "message": "Invalid JSON response"}
                     elif response.status == 404:
                         logger.warning(f"Attempt {attempt + 1}: City '{city_name}' not found by OWM (404).")
                         return {"cod": 404, "message": "City not found"}
@@ -125,7 +125,7 @@ async def get_weather_data_by_coords(bot: Bot, latitude: float, longitude: float
         for attempt in range(MAX_RETRIES):
             try:
                 logger.debug(f"Attempt {attempt + 1}/{MAX_RETRIES} to fetch weather for coords ({latitude:.4f}, {longitude:.4f})")
-                async with session.get(api_url, params=params, timeout=10) as response:
+                async with session.get(api_url, params=params, timeout=config.API_REQUEST_TIMEOUT) as response:
                     if response.status == 200:
                         try:
                             data = await response.json()
@@ -133,7 +133,7 @@ async def get_weather_data_by_coords(bot: Bot, latitude: float, longitude: float
                             return data
                         except aiohttp.ContentTypeError:
                             logger.error(f"Attempt {attempt + 1}: Failed to decode JSON from OWM. Response: {await response.text()}")
-                            return {"cod": 500, "message": "Invalid JSON response"}
+                        return {"cod": 500, "message": "Invalid JSON response"}
                     elif response.status == 401:
                         logger.error(f"Attempt {attempt + 1}: Invalid OWM API key (401).")
                         return {"cod": 401, "message": "Invalid API key"}
@@ -193,7 +193,7 @@ async def get_5day_forecast(bot: Bot, city_name: str) -> Optional[Dict[str, Any]
         for attempt in range(MAX_RETRIES):
             try:
                 logger.debug(f"Attempt {attempt + 1}/{MAX_RETRIES} to fetch 5-day forecast for {city_name}")
-                async with session.get(api_url, params=params, timeout=15) as response:
+                async with session.get(api_url, params=params, timeout=config.API_REQUEST_TIMEOUT) as response:
                     if response.status == 200:
                         try:
                             data = await response.json()
@@ -201,7 +201,7 @@ async def get_5day_forecast(bot: Bot, city_name: str) -> Optional[Dict[str, Any]
                             return data
                         except aiohttp.ContentTypeError:
                             logger.error(f"Attempt {attempt + 1}: Failed to decode JSON from OWM. Response: {await response.text()}")
-                            return {"cod": "500", "message": "Invalid JSON response"}
+                        return {"cod": "500", "message": "Invalid JSON response"}
                     elif response.status == 404:
                         logger.warning(f"Attempt {attempt + 1}: City '{city_name}' not found by OWM (404).")
                         return {"cod": "404", "message": "City not found"}

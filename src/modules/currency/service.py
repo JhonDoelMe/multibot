@@ -15,8 +15,8 @@ PB_API_URL_CASH = "https://api.privatbank.ua/p24api/pubinfo?exchange&coursid=5"
 PB_API_URL_NONCASH = "https://api.privatbank.ua/p24api/pubinfo?exchange&coursid=11"
 
 # Параметры Retry
-MAX_RETRIES = 3
-INITIAL_DELAY = 1  # Секунда
+MAX_RETRIES = config.MAX_RETRIES
+INITIAL_DELAY = config.INITIAL_DELAY
 
 # Целевые валюты
 TARGET_CURRENCIES = {"USD", "EUR"}
@@ -31,7 +31,7 @@ async def get_pb_exchange_rates(bot: Bot, cash: bool = True) -> Optional[List[Di
         for attempt in range(MAX_RETRIES):
             try:
                 logger.debug(f"Attempt {attempt + 1}/{MAX_RETRIES} to fetch PB rates (cash={cash})")
-                async with session.get(url, timeout=10) as response:
+                async with session.get(url, timeout=config.API_REQUEST_TIMEOUT) as response:
                     if response.status == 200:
                         try:
                             data = await response.json()
@@ -43,7 +43,7 @@ async def get_pb_exchange_rates(bot: Bot, cash: bool = True) -> Optional[List[Di
                             return filtered_data
                         except aiohttp.ContentTypeError:
                             logger.error(f"Attempt {attempt + 1}: Failed to decode JSON from PB. Response: {await response.text()}")
-                            return None
+                        return None
                     elif response.status == 429:
                         last_exception = aiohttp.ClientResponseError(
                             response.request_info, response.history,

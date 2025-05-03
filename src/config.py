@@ -26,6 +26,11 @@ RUN_WITH_WEBHOOK = bool(WEBHOOK_PATH)
 # --- Настройки Базы Данных ---
 DATABASE_URL = os.getenv("DATABASE_URL")
 
+# Параметры ретраев для API-запросов
+MAX_RETRIES = 3  # Максимальное количество попыток при ошибках API
+INITIAL_DELAY = 1  # Начальная задержка для ретраев в секундах
+API_REQUEST_TIMEOUT = 15  # Таймаут для HTTP-запросов к API в секундах
+
 # --- Sentry DSN ---
 SENTRY_DSN = os.getenv("SENTRY_DSN") # <<< ДОБАВЛЕНО
 

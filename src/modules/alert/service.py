@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 UKRAINEALARM_API_URL = "https://api.ukrainealarm.com/api/v3/alerts"
 
 # Параметры Retry
-MAX_RETRIES = 3
-INITIAL_DELAY = 1  # Секунда
+MAX_RETRIES = config.MAX_RETRIES
+INITIAL_DELAY = config.INITIAL_DELAY
 
 # Часовой пояс Украины
 TZ_KYIV = pytz.timezone('Europe/Kyiv')
@@ -58,7 +58,7 @@ async def get_active_alerts(bot: Bot) -> Optional[List[Dict[str, Any]]]:
         for attempt in range(MAX_RETRIES):
             try:
                 logger.debug(f"Attempt {attempt + 1}/{MAX_RETRIES} to fetch UA alerts")
-                async with session.get(UKRAINEALARM_API_URL, headers=headers, timeout=15) as response:
+                async with session.get(UKRAINEALARM_API_URL, headers=headers, timeout=config.API_REQUEST_TIMEOUT) as response:
                     if response.status == 200:
                         try:
                             data = await response.json()
