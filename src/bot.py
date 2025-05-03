@@ -121,9 +121,9 @@ async def main() -> None:
                     await dp.start_polling(bot)
                     break
                 except TelegramNetworkError as e:
-                    logger.error(f"TelegramNetworkError during polling (attempt {attempt + 1}/{max_retries}): {e}")
+                    logger.error(f"TelegramNetworkError during polling (attempt {attempt + 1}/{max_retries}): {str(e)} ({repr(e)})")
                     if attempt < max_retries - 1:
-                        delay = 2 ** attempt  # Экспоненциальная задержка: 1, 2, 4, 8, 16 сек
+                        delay = 2 * (2 ** attempt)  # Экспоненциальная задержка: 2, 4, 8, 16, 32 сек
                         logger.info(f"Waiting {delay} seconds before retrying...")
                         await asyncio.sleep(delay)
                     else:

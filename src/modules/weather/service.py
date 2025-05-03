@@ -35,7 +35,7 @@ ICON_CODE_TO_EMOJI = {
 }
 
 async def get_weather_data(bot: Bot, city_name: str) -> Optional[Dict[str, Any]]:
-    """ Получает данные о погоде, используя сессию бота. """
+    """ Получает данные о погоде. """
     if not config.WEATHER_API_KEY:
         logger.error("OpenWeatherMap API key (WEATHER_API_KEY) is not configured.")
         return {"cod": 500, "message": "API key not configured"}
@@ -49,14 +49,7 @@ async def get_weather_data(bot: Bot, city_name: str) -> Optional[Dict[str, Any]]
     last_exception = None
     api_url = OWM_API_URL
 
-    # Проверка типа сессии
-    session = bot.session
-    logger.debug(f"Session type for get_weather_data: {type(session)}")
-    if not isinstance(session, aiohttp.ClientSession):
-        logger.error(f"Invalid session type: expected aiohttp.ClientSession, got {type(session)}")
-        return {"cod": 500, "message": "Invalid HTTP session"}
-
-    async with session as session:  # Используем bot.session
+    async with aiohttp.ClientSession() as session:
         for attempt in range(MAX_RETRIES):
             try:
                 logger.debug(f"Attempt {attempt + 1}/{MAX_RETRIES} to fetch weather for {city_name}")
@@ -113,7 +106,7 @@ async def get_weather_data(bot: Bot, city_name: str) -> Optional[Dict[str, Any]]
     return {"cod": 500, "message": "Failed after all weather retries"}
 
 async def get_weather_data_by_coords(bot: Bot, latitude: float, longitude: float) -> Optional[Dict[str, Any]]:
-    """ Получает данные о погоде по координатам, используя сессию бота. """
+    """ Получает данные о погоде по координатам. """
     if not config.WEATHER_API_KEY:
         logger.error("OpenWeatherMap API key (WEATHER_API_KEY) is not configured.")
         return {"cod": 500, "message": "API key not configured"}
@@ -128,14 +121,7 @@ async def get_weather_data_by_coords(bot: Bot, latitude: float, longitude: float
     last_exception = None
     api_url = OWM_API_URL
 
-    # Проверка типа сессии
-    session = bot.session
-    logger.debug(f"Session type for get_weather_data_by_coords: {type(session)}")
-    if not isinstance(session, aiohttp.ClientSession):
-        logger.error(f"Invalid session type: expected aiohttp.ClientSession, got {type(session)}")
-        return {"cod": 500, "message": "Invalid HTTP session"}
-
-    async with session as session:
+    async with aiohttp.ClientSession() as session:
         for attempt in range(MAX_RETRIES):
             try:
                 logger.debug(f"Attempt {attempt + 1}/{MAX_RETRIES} to fetch weather for coords ({latitude:.4f}, {longitude:.4f})")
@@ -189,7 +175,7 @@ async def get_weather_data_by_coords(bot: Bot, latitude: float, longitude: float
     return {"cod": 500, "message": "Failed after all weather retries"}
 
 async def get_5day_forecast(bot: Bot, city_name: str) -> Optional[Dict[str, Any]]:
-    """ Получает прогноз на 5 дней, используя сессию бота. """
+    """ Получает прогноз на 5 дней. """
     if not config.WEATHER_API_KEY:
         logger.error("OpenWeatherMap API key (WEATHER_API_KEY) is not configured.")
         return {"cod": "500", "message": "API key not configured"}
@@ -203,14 +189,7 @@ async def get_5day_forecast(bot: Bot, city_name: str) -> Optional[Dict[str, Any]
     last_exception = None
     api_url = OWM_FORECAST_URL
 
-    # Проверка типа сессии
-    session = bot.session
-    logger.debug(f"Session type for get_5day_forecast: {type(session)}")
-    if not isinstance(session, aiohttp.ClientSession):
-        logger.error(f"Invalid session type: expected aiohttp.ClientSession, got {type(session)}")
-        return {"cod": "500", "message": "Invalid HTTP session"}
-
-    async with session as session:
+    async with aiohttp.ClientSession() as session:
         for attempt in range(MAX_RETRIES):
             try:
                 logger.debug(f"Attempt {attempt + 1}/{MAX_RETRIES} to fetch 5-day forecast for {city_name}")
