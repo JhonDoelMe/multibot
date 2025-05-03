@@ -4,6 +4,8 @@ import logging
 import aiohttp
 import asyncio
 from typing import Optional, Dict, Any, List
+from datetime import datetime
+import pytz
 from aiogram import Bot
 from aiocache import cached
 
@@ -137,7 +139,7 @@ async def get_regions(bot: Bot) -> Optional[Dict[str, Any]]:
                 return {"status": "error", "message": "Failed after multiple retries"}
     return {"status": "error", "message": "Failed after all region retries"}
 
-def format_alert_message(alert_data: List[Dict[str, Any]], region_name: str = "") -> str:
+def format_alerts_message(alert_data: List[Dict[str, Any]], region_name: str = "") -> str:
     """ Форматирует сообщение о тревогах. """
     try:
         if not isinstance(alert_data, list):
@@ -168,5 +170,5 @@ def format_alert_message(alert_data: List[Dict[str, Any]], region_name: str = ""
 
         return "\n".join(message_lines)
     except Exception as e:
-        logger.exception(f"Error formatting alert message: {e}")
+        logger.exception(f"Error formatting alerts message: {e}")
         return "😥 Помилка обробки даних тривог."
