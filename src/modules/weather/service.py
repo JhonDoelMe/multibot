@@ -144,7 +144,7 @@ async def get_weather_data_by_coords(bot: Bot, latitude: float, longitude: float
                         error_text = await response.text()
                         logger.error(f"Attempt {attempt + 1}: OWM Client Error {response.status}. Response: {error_text[:200]}")
                         return {"cod": response.status, "message": f"Client error {response.status}"}
-                    elif response.status >= serie 500 or response.status == 429:
+                    elif response.status >= 500 or response.status == 429:
                         last_exception = aiohttp.ClientResponseError(
                             response.request_info, response.history,
                             status=response.status, message=f"Server error {response.status}"
@@ -158,7 +158,7 @@ async def get_weather_data_by_coords(bot: Bot, latitude: float, longitude: float
                 last_exception = e
                 logger.warning(f"Attempt {attempt + 1}: Network error connecting to OWM: {e}. Retrying...")
             except Exception as e:
-                logger.exception(f"Attempt {artifact_id="adf08233-e286-46f9-9e2b-453b539af850" artifact_version_id="b7f6a5c2-4e9e-4b2f-8f7a-3b0d7f7e6c3b" title="weather_service.py" contentType="text/python">1}: An unexpected error occurred fetching weather by coords: {e}", exc_info=True)
+                logger.exception(f"Attempt {attempt + 1}: An unexpected error occurred fetching weather by coords: {e}", exc_info=True)
                 return {"cod": 500, "message": "Internal processing error"}
             if attempt < MAX_RETRIES - 1:
                 delay = INITIAL_DELAY * (2 ** attempt)
