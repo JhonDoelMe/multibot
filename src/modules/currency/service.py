@@ -2,6 +2,7 @@
 
 import logging
 import asyncio
+import aiohttp
 from typing import Optional, Dict, Any, List
 from aiogram import Bot
 from aiocache import cached
@@ -32,7 +33,7 @@ async def get_pb_exchange_rates(bot: Bot, cash: bool = True) -> Optional[List[Di
     for attempt in range(MAX_RETRIES):
         try:
             logger.debug(f"Attempt {attempt + 1}/{MAX_RETRIES} to fetch PB rates (cash={cash})")
-            async with bot.session.session.get(url, timeout=config.API_REQUEST_TIMEOUT) as response:
+            async with bot.session.get(url, timeout=config.API_REQUEST_TIMEOUT) as response:
                 if response.status == 200:
                     try:
                         data = await response.json()

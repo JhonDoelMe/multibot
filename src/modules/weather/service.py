@@ -2,6 +2,7 @@
 
 import logging
 import asyncio
+import aiohttp
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timedelta
 import pytz
@@ -53,7 +54,7 @@ async def get_weather_data(bot: Bot, city_name: str) -> Optional[Dict[str, Any]]
     for attempt in range(MAX_RETRIES):
         try:
             logger.debug(f"Attempt {attempt + 1}/{MAX_RETRIES} to fetch weather for {city_name}")
-            async with bot.session.session.get(api_url, params=params, timeout=config.API_REQUEST_TIMEOUT) as response:
+            async with bot.session.get(api_url, params=params, timeout=config.API_REQUEST_TIMEOUT) as response:
                 if response.status == 200:
                     try:
                         data = await response.json()
@@ -125,7 +126,7 @@ async def get_weather_data_by_coords(bot: Bot, latitude: float, longitude: float
     for attempt in range(MAX_RETRIES):
         try:
             logger.debug(f"Attempt {attempt + 1}/{MAX_RETRIES} to fetch weather for coords ({latitude:.4f}, {longitude:.4f})")
-            async with bot.session.session.get(api_url, params=params, timeout=config.API_REQUEST_TIMEOUT) as response:
+            async with bot.session.get(api_url, params=params, timeout=config.API_REQUEST_TIMEOUT) as response:
                 if response.status == 200:
                     try:
                         data = await response.json()
@@ -192,7 +193,7 @@ async def get_5day_forecast(bot: Bot, city_name: str) -> Optional[Dict[str, Any]
     for attempt in range(MAX_RETRIES):
         try:
             logger.debug(f"Attempt {attempt + 1}/{MAX_RETRIES} to fetch 5-day forecast for {city_name}")
-            async with bot.session.session.get(api_url, params=params, timeout=config.API_REQUEST_TIMEOUT) as response:
+            async with bot.session.get(api_url, params=params, timeout=config.API_REQUEST_TIMEOUT) as response:
                 if response.status == 200:
                     try:
                         data = await response.json()

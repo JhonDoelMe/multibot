@@ -31,7 +31,7 @@ async def get_active_alerts(bot: Bot, region_name: str = "") -> Optional[Dict[st
     for attempt in range(config.MAX_RETRIES):
         try:
             logger.debug(f"Attempt {attempt + 1}/{config.MAX_RETRIES} to fetch alerts for region '{region_name or 'all'}'")
-            async with bot.session.session.get(UA_ALERTS_API_URL, headers=headers, params=params, timeout=config.API_REQUEST_TIMEOUT) as response:
+            async with bot.session.get(UA_ALERTS_API_URL, headers=headers, params=params, timeout=config.API_REQUEST_TIMEOUT) as response:
                 if response.status == 200:
                     try:
                         data = await response.json()
@@ -93,7 +93,7 @@ async def get_regions(bot: Bot) -> Optional[Dict[str, Any]]:
     for attempt in range(config.MAX_RETRIES):
         try:
             logger.debug(f"Attempt {attempt + 1}/{config.MAX_RETRIES} to fetch regions")
-            async with bot.session.session.get(UA_REGION_API_URL, headers=headers, timeout=config.API_REQUEST_TIMEOUT) as response:
+            async with bot.session.get(UA_REGION_API_URL, headers=headers, timeout=config.API_REQUEST_TIMEOUT) as response:
                 if response.status == 200:
                     try:
                         data = await response.json()
