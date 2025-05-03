@@ -40,6 +40,7 @@ try:
     from sentry_sdk.integrations.aiohttp import AioHttpIntegration
     from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
     from src import config # Импортируем конфиг здесь
+    from aiocache import caches
 
     if config.SENTRY_DSN:
         logger.info("Attempting to initialize Sentry SDK...")
@@ -67,6 +68,21 @@ except Exception as e:
     logger.exception(f"Failed to initialize Sentry SDK: {e}", exc_info=True)
 # --- Конец инициализации Sentry ---
 
+# --- Настройка aiocache ---
+logger.info("Initializing aiocache...")
+try:
+    caches.set_config({
+        "default": {
+            "cache": "aiocache.SimpleMemoryCache" if config.CACHE_BACKEND == "memory" else "aiocache.RedisCache",
+            "endpoint": config.CACHE_REDIS_URL.split("://")[1].split(":")[0] if config.CACHE_BACKEND == "redis" else None,
+            "port": int(config.CACHE_REDIS_URL.split(":")[-1].split("/")[0]) if config.CACHE_BACKEND == "redis" else None,
+            "db": int(config.CACHE_REDIS_URL.split("/")[-1]) if config.CACHE_BACKEND == "redis" else None,
+        }
+    })
+    logger.info("aiocache initialized successfully.")
+except Exception as e:
+    logger.error(f"Failed to initialize aiocache: {e}", exc_info=True)
+# --- Конец настройки aiocache ---
 
 # --- Импорт и запуск бота ---
 # Импортируем main ПОСЛЕ инициализации Sentry
