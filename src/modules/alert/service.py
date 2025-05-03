@@ -17,25 +17,28 @@ logger = logging.getLogger(__name__)
 UA_ALERTS_API_URL = "https://api.ukrainealarm.com/api/v3/alerts"
 UA_REGION_API_URL = "https://api.ukrainealarm.com/api/v3/regions"
 
+# Часовой пояс Украины
+TZ_KYIV = pytz.timezone('Europe/Kyiv')
+
 # Маппинг типов тревог на эмодзи (можно расширить)
 ALERT_TYPE_EMOJI = {
     "AIR": "🚨",
     "ARTILLERY": "💣",
     "URBAN_FIGHTS": "💥",
-    "CHEMICAL": "☣️",  # Химическая
-    "NUCLEAR": "☢️",   # Ядерная
-    "INFO": "ℹ️",      # Информационное сообщение
-    "UNKNOWN": "❓"    # Неизвестный тип
+    "CHEMICAL": "☣️",
+    "NUCLEAR": "☢️",
+    "INFO": "ℹ️",
+    "UNKNOWN": "❓"
 }
 
 @cached(ttl=config.CACHE_TTL_ALERTS, key_builder=lambda *args, **kwargs: f"alerts:{kwargs.get('region_name', '').lower()}", namespace="alerts")
-async def get_active_alerts(bot: Bot, region_name: str = "") -> Optional[Dict[str, Any]]:
+async def get_active_alerts(bot: Bot, region_name: str = "") -> Optional[List[Dict[str, Any]]]:
     """ Получает данные о тревогах по региону или всей Украине. """
     if not config.UKRAINEALARM_API_TOKEN:
         logger.error("UkraineAlarm API token (UKRAINEALARM_API_TOKEN) is not configured.")
         return {"status": "error", "message": "API token not configured"}
 
-    headers = {"Authorization": f"Bearer {config.UKRAINEALARM_API_TOKEN}"}
+    headers = {"Authorization": config.UKRAINEALARM_API_TOKEN}
     last_exception = None
     params = {} if not region_name else {"regionId": region_name}
 
@@ -59,12 +62,18 @@ async def get_active_alerts(bot: Bot, region_name: str = "") -> Optional[Dict[st
                     elif response.status == 404:
                         logger.warning(f"Attempt {attempt + 1}: Region '{region_name}' not found by UkraineAlarm (404).")
                         return {"status": "error", "message": "Region not found"}
-                    elif response.status >= 500 or response.status == 429:
+                    elif response.status == 429:
+                        last_exception = aiohttp.ClientResponseError(
+                            response.request_info, response.history,
+                            status=429, message="Rate limit exceeded"
+                        )
+                        logger.warning(f"Attempt {attempt + 1}: UkraineAlarm RateLimit Error (429). Retrying...")
+                    elif response.status >= 500:
                         last_exception = aiohttp.ClientResponseError(
                             response.request_info, response.history,
                             status=response.status, message=f"Server error {response.status}"
                         )
-                        logger.warning(f"Attempt {attempt + 1}: UkraineAlarm Server/RateLimit Error {response.status}. Retrying...")
+                        logger.warning(f"Attempt {attempt + 1}: UkraineAlarm Server Error {response.status}. Retrying...")
                     else:
                         error_text = await response.text()
                         logger.error(f"Attempt {attempt + 1}: UkraineAlarm Error {response.status}. Response: {error_text[:200]}")
@@ -100,7 +109,7 @@ async def get_regions(bot: Bot) -> Optional[Dict[str, Any]]:
         logger.error("UkraineAlarm API token (UKRAINEALARM_API_TOKEN) is not configured.")
         return {"status": "error", "message": "API token not configured"}
 
-    headers = {"Authorization": f"Bearer {config.UKRAINEALARM_API_TOKEN}"}
+    headers = {"Authorization": config.UKRAINEALARM_API_TOKEN}
     last_exception = None
 
     for attempt in range(config.MAX_RETRIES):
@@ -120,12 +129,18 @@ async def get_regions(bot: Bot) -> Optional[Dict[str, Any]]:
                         error_text = await response.text()
                         logger.error(f"Attempt {attempt + 1}: Invalid UkraineAlarm API token (401). Response: {error_text[:200]}")
                         return {"status": "error", "message": f"Invalid API token: {error_text[:100]}"}
-                    elif response.status >= 500 or response.status == 429:
+                    elif response.status == 429:
+                        last_exception = aiohttp.ClientResponseError(
+                            response.request_info, response.history,
+                            status=429, message="Rate limit exceeded"
+                        )
+                        logger.warning(f"Attempt {attempt + 1}: UkraineAlarm RateLimit Error (429). Retrying...")
+                    elif response.status >= 500:
                         last_exception = aiohttp.ClientResponseError(
                             response.request_info, response.history,
                             status=response.status, message=f"Server error {response.status}"
                         )
-                        logger.warning(f"Attempt {attempt + 1}: UkraineAlarm Server/RateLimit Error {response.status}. Retrying...")
+                        logger.warning(f"Attempt {attempt + 1}: UkraineAlarm Server Error {response.status}. Retrying...")
                     else:
                         error_text = await response.text()
                         logger.error(f"Attempt {attempt + 1}: UkraineAlarm Error {response.status}. Response: {error_text[:200]}")
@@ -154,38 +169,49 @@ async def get_regions(bot: Bot) -> Optional[Dict[str, Any]]:
                 return {"status": "error", "message": "Failed after multiple retries"}
     return {"status": "error", "message": "Failed after all region retries"}
 
-def format_alerts_message(alert_data: List[Dict[str, Any]], region_name: str = "") -> str:
+def format_alerts_message(alert_data: Optional[List[Dict[str, Any]]], region_name: str = "") -> str:
     """ Форматирует сообщение о тревогах. """
-    try:
-        if not isinstance(alert_data, list):
-            api_message = alert_data.get("message", "Невідома помилка")
-            return f"😥 Не вдалося отримати дані тривог: {api_message}"
+    now_kyiv = datetime.now(TZ_KYIV).strftime('%H:%M %d.%m.%Y')
+    region_display = f" у регіоні {region_name}" if region_name else " по Україні"
+    header = f"<b>🚨 Статус тривог{region_display} станом на {now_kyiv}:</b>\n"
 
-        active_alerts = [
-            alert for alert in alert_data
-            if alert.get("status") == "active" or alert.get("type") == "air_raid"
-        ]
+    if alert_data is None:
+        return header + "\n😥 Не вдалося отримати дані. Спробуйте пізніше."
+    if isinstance(alert_data, dict) and "status" in alert_data:
+        error_msg = alert_data.get("message", "Невідома помилка API")
+        return header + f"\n😥 Помилка: {error_msg}. Спробуйте пізніше."
 
-        current_time = datetime.now(pytz.timezone('Europe/Kyiv')).strftime("%H:%M %d.%m.%Y")
-        region_display = f" у регіоні {region_name}" if region_name else " по Україні"
-        message_lines = [f"🚨 <b>Статус тривог{region_display} станом на {current_time}:</b>\n"]
+    # Проверяем формат ответа API
+    active_regions = {}
+    if alert_data and isinstance(alert_data, list) and alert_data:
+        if "activeAlerts" in alert_data[0]:  # Формат справочной версии
+            for region_alert_info in alert_data:
+                reg_name = region_alert_info.get("regionName", "Невідомий регіон")
+                if reg_name not in active_regions:
+                    active_regions[reg_name] = []
+                for alert in region_alert_info.get("activeAlerts", []):
+                    alert_type = alert.get("type", "UNKNOWN").upper()
+                    if alert_type not in active_regions[reg_name]:
+                        active_regions[reg_name].append(alert_type)
+        else:  # Формат текущей версии
+            for alert in alert_data:
+                if alert.get("status") != "active" and alert.get("type") != "air_raid":
+                    continue
+                reg_name = alert.get("regionName", "Невідомий регіон")
+                alert_type = alert.get("type", "UNKNOWN").upper()
+                if reg_name not in active_regions:
+                    active_regions[reg_name] = []
+                if alert_type not in active_regions[reg_name]:
+                    active_regions[reg_name].append(alert_type)
 
-        if not active_alerts:
-            message_lines.append("🟢 Наразі тривог немає. Все спокійно.")
-        else:
-            for alert in active_alerts:
-                region = alert.get("regionName", "Невідомий регіон")
-                alert_type_raw = alert.get("type", "UNKNOWN").upper()
-                alert_type = "повітряна тривога" if alert_type_raw == "AIR_RAID" else alert_type_raw.lower().replace("_", " ")
-                emoji = ALERT_TYPE_EMOJI.get(alert_type_raw, ALERT_TYPE_EMOJI["UNKNOWN"])
-                updated_at = alert.get("lastUpdate", "невідомо")
-                try:
-                    updated_time = datetime.fromisoformat(updated_at.replace("Z", "+00:00")).astimezone(pytz.timezone('Europe/Kyiv')).strftime("%H:%M %d.%m")
-                except (ValueError, TypeError):
-                    updated_time = "невідомо"
-                message_lines.append(f"🔴 {region}: {alert_type} {emoji} (оновлено: {updated_time})")
+    if not active_regions:
+        return header + "\n🟢 Наразі тривог немає. Все спокійно."
 
-        return "\n".join(message_lines)
-    except Exception as e:
-        logger.exception(f"Error formatting alerts message: {e}")
-        return "😥 Помилка обробки даних тривог."
+    message_lines = [header]
+    for reg_name in sorted(active_regions.keys()):
+        alerts_str = ", ".join([ALERT_TYPE_EMOJI.get(atype, atype) for atype in active_regions[reg_name]])
+        message_lines.append(f"🔴 <b>{reg_name}:</b> {alerts_str}")
+
+    message_lines.append("\n<tg-spoiler>Джерело: api.ukrainealarm.com</tg-spoiler>")
+    message_lines.append("🙏 Будь ласка, бережіть себе та прямуйте в укриття!")
+    return "\n".join(message_lines)
