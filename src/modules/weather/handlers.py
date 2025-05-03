@@ -270,7 +270,7 @@ async def handle_forecast_request(callback: CallbackQuery, state: FSMContext, se
 async def handle_show_current_weather(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
     # ... (код без изменений) ...
      user_data = await state.get_data(); current_city = user_data.get("current_shown_city"); preferred_city = user_data.get("preferred_city"); user_id = callback.from_user.id
-     if current_city: logger.info(f"User {user_id} requested back to current weather: {current_city}"); is_preferred_city = (preferred_city is not None and preferred_city.lower() == current_city.lower()); await _get_and_show_weather(callback, state, session, city_input=current_city, is_preferred=is_preferred_city) # Передаем city_input
+     if current_city: logger.info(f"User {user_id} requested back to current weather: {current_city}"); is_preferred_city = (preferred_city is not None and preferred_city.lower() == current_city.lower()); await _get_and_show_weather(callback, state, session, city_input=current_city) # Передаем city_input
      else: logger.warning(f"User {user_id} requested back to current weather, no city in state."); await callback.answer("...", show_alert=True); from src.handlers.utils import show_main_menu_message; await state.clear(); await show_main_menu_message(callback)
 
 
