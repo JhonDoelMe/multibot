@@ -1,6 +1,7 @@
-# src/modules/weather/handlers.py (Исправлен SyntaxError в weather_entry_point)
+# src/modules/weather/handlers.py
 
 import logging
+import re
 from typing import Union, Optional, Dict, Any
 from aiogram import Bot, Router, F
 from aiogram.types import Message, CallbackQuery
@@ -30,7 +31,6 @@ class WeatherStates(StatesGroup):
     waiting_for_city = State()
     waiting_for_save_decision = State()
 
-# --- Функция _get_and_show_weather (без изменений с ответа #118) ---
 async def _get_and_show_weather(
     bot: Bot, target: Union[Message, CallbackQuery], state: FSMContext, session: AsyncSession,
     city_input: Optional[str] = None, coords: Optional[Dict[str, float]] = None
@@ -93,8 +93,6 @@ async def _get_and_show_weather(
              except Exception as e2: logger.error(f"Failed to send error message (other) either: {e2}")
          logger.error(f"Failed to get weather for {request_details} for user {user_id}. Code: {error_code}, Msg: {error_api_message}"); await state.clear()
 
-
-# --- ИСПРАВЛЕНА ФУНКЦИЯ weather_entry_point ---
 async def weather_entry_point(target: Union[Message, CallbackQuery], state: FSMContext, session: AsyncSession, bot: Bot):
     user_id = target.from_user.id; message_to_edit_or_answer = target.message if isinstance(target, CallbackQuery) else target; db_user = await session.get(User, user_id)
     if isinstance(target, CallbackQuery): await target.answer()
@@ -108,7 +106,6 @@ async def weather_entry_point(target: Union[Message, CallbackQuery], state: FSMC
         logger.info(log_msg)
         text = "🌍 Будь ласка, введіть назву міста або надішліть геолокацію:"
         reply_markup = get_weather_enter_city_back_keyboard()
-        # --- ИСПРАВЛЕНО ЗДЕСЬ: try на новой строке ---
         try:
              if isinstance(target, CallbackQuery):
                  await message_to_edit_or_answer.edit_text(text, reply_markup=reply_markup)
@@ -122,15 +119,24 @@ async def weather_entry_point(target: Union[Message, CallbackQuery], state: FSMC
                    logger.error(f"Could not send message asking for city: {e2}")
         await state.set_state(WeatherStates.waiting_for_city)
 
-
-# --- Остальные хэндлеры без изменений с прошлого раза ---
 @router.message(F.location)
 async def handle_location(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
      if message.location: lat = message.location.latitude; lon = message.location.longitude; user_id = message.from_user.id; logger.info(f"Received location from user {user_id}: lat={lat}, lon={lon}"); await state.clear(); await _get_and_show_weather(bot, message, state, session, coords={"lat": lat, "lon": lon})
 
 @router.message(WeatherStates.waiting_for_city)
 async def handle_city_input(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
-     user_city_input = message.text.strip(); await _get_and_show_weather(bot, message, state, session, city_input=user_city_input)
+     user_city_input = message.text.strip()
+     # Валидация ввода города
+     if not user_city_input:
+         await message.answer("😔 Введіть назву міста (не порожній текст).", reply_markup=get_weather_enter_city_back_keyboard())
+         return
+     if len(user_city_input) > 100:
+         await message.answer("😔 Назва міста занадто довга (макс. 100 символів). Спробуйте ще раз.", reply_markup=get_weather_enter_city_back_keyboard())
+         return
+     if not re.match(r'^[A-Za-zА-Яа-я\s\-]+$', user_city_input):
+         await message.answer("😔 Назва міста може містити лише літери, пробіли та дефіси. Спробуйте ще раз.", reply_markup=get_weather_enter_city_back_keyboard())
+         return
+     await _get_and_show_weather(bot, message, state, session, city_input=user_city_input)
 
 @router.callback_query(F.data == CALLBACK_WEATHER_OTHER_CITY)
 async def handle_action_other_city(callback: CallbackQuery, state: FSMContext):

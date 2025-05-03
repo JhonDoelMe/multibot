@@ -2,7 +2,6 @@
 
 from datetime import datetime
 from typing import Optional
-
 from sqlalchemy import BigInteger, String, TIMESTAMP, func
 from sqlalchemy.orm import Mapped, mapped_column
 
