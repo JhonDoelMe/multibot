@@ -3,10 +3,8 @@
 import logging
 import aiohttp
 import asyncio
-from typing import Optional, List, Dict, Any
-from datetime import datetime
+from typing import Optional, Dict, Any, List
 from aiogram import Bot
-import pytz
 from aiocache import cached
 
 from src import config
@@ -14,145 +12,161 @@ from src import config
 logger = logging.getLogger(__name__)
 
 # Константы API
-UKRAINEALARM_API_URL = "https://api.ukrainealarm.com/api/v3/alerts"
+UA_ALERTS_API_URL = "https://api.ukrainealarm.com/api/v3/alerts"
+UA_REGION_API_URL = "https://api.ukrainealarm.com/api/v3/regions"
 
-# Параметры Retry
-MAX_RETRIES = config.MAX_RETRIES
-INITIAL_DELAY = config.INITIAL_DELAY
-
-# Часовой пояс Украины
-TZ_KYIV = pytz.timezone('Europe/Kyiv')
-
-# Маппинг типов тревог на эмодзи
-ALERT_TYPE_EMOJI = {
-    "AIR": "🚨",
-    "ARTILLERY": "💣",
-    "URBAN_FIGHTS": "💥",
-    "CHEMICAL": "☣️",
-    "NUCLEAR": "☢️",
-    "INFO": "ℹ️",
-    "UNKNOWN": "❓"
-}
-
-@cached(ttl=config.CACHE_TTL_ALERTS, key="alerts", namespace="alert")
-async def get_active_alerts(bot: Bot) -> Optional[List[Dict[str, Any]]]:
-    """
-    Получает список активных тревог с API UkraineAlarm.
-
-    Args:
-        bot: Экземпляр бота Aiogram (для совместимости с текущей архитектурой).
-
-    Returns:
-        Список словарей с данными об активных тревогах или None при ошибке.
-    """
+@cached(ttl=config.CACHE_TTL_ALERTS, key_builder=lambda *args, **kwargs: f"alerts:{kwargs.get('region_name', '').lower()}", namespace="alerts")
+async def get_active_alerts(bot: Bot, region_name: str = "") -> Optional[Dict[str, Any]]:
+    """ Получает данные о тревогах по региону или всей Украине. """
     if not config.UKRAINEALARM_API_TOKEN:
         logger.error("UkraineAlarm API token (UKRAINEALARM_API_TOKEN) is not configured.")
-        return None
+        return {"status": "error", "message": "API token not configured"}
 
-    headers = {
-        "Authorization": config.UKRAINEALARM_API_TOKEN,
-        "Accept": "application/json"
-    }
+    headers = {"Authorization": f"Bearer {config.UKRAINEALARM_API_TOKEN}"}
+    last_exception = None
+    params = {} if not region_name else {"regionId": region_name}
+
+    for attempt in range(config.MAX_RETRIES):
+        try:
+            logger.debug(f"Attempt {attempt + 1}/{config.MAX_RETRIES} to fetch alerts for region '{region_name or 'all'}'")
+            async with bot.session.session.get(UA_ALERTS_API_URL, headers=headers, params=params, timeout=config.API_REQUEST_TIMEOUT) as response:
+                if response.status == 200:
+                    try:
+                        data = await response.json()
+                        logger.debug(f"UkraineAlarm response: {data}")
+                        return data
+                    except aiohttp.ContentTypeError:
+                        logger.error(f"Attempt {attempt + 1}: Failed to decode JSON from UkraineAlarm. Response: {await response.text()}")
+                        return {"status": "error", "message": "Invalid JSON response"}
+                elif response.status == 401:
+                    logger.error(f"Attempt {attempt + 1}: Invalid UkraineAlarm API token (401).")
+                    return {"status": "error", "message": "Invalid API token"}
+                elif response.status == 404:
+                    logger.warning(f"Attempt {attempt + 1}: Region '{region_name}' not found by UkraineAlarm (404).")
+                    return {"status": "error", "message": "Region not found"}
+                elif response.status >= 500 or response.status == 429:
+                    last_exception = aiohttp.ClientResponseError(
+                        response.request_info, response.history,
+                        status=response.status, message=f"Server error {response.status}"
+                    )
+                    logger.warning(f"Attempt {attempt + 1}: UkraineAlarm Server/RateLimit Error {response.status}. Retrying...")
+                else:
+                    error_text = await response.text()
+                    logger.error(f"Attempt {attempt + 1}: UkraineAlarm Error {response.status}. Response: {error_text[:200]}")
+                    return {"status": "error", "message": f"Client error {response.status}"}
+
+        except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
+            last_exception = e
+            logger.warning(f"Attempt {attempt + 1}: Network error connecting to UkraineAlarm: {e}. Retrying...")
+        except Exception as e:
+            logger.exception(f"Attempt {attempt + 1}: An unexpected error occurred fetching alerts: {e}", exc_info=True)
+            return {"status": "error", "message": "Internal processing error"}
+
+        if attempt < config.MAX_RETRIES - 1:
+            delay = config.INITIAL_DELAY * (2 ** attempt)
+            logger.info(f"Waiting {delay} seconds before next alert retry...")
+            await asyncio.sleep(delay)
+        else:
+            logger.error(f"All {config.MAX_RETRIES} attempts failed for alerts (region: {region_name or 'all'}). Last error: {last_exception!r}")
+            if isinstance(last_exception, aiohttp.ClientResponseError):
+                return {"status": "error", "message": f"Server error {last_exception.status} after retries"}
+            elif isinstance(last_exception, aiohttp.ClientConnectorError):
+                return {"status": "error", "message": "Network error after retries"}
+            elif isinstance(last_exception, asyncio.TimeoutError):
+                return {"status": "error", "message": "Timeout error after retries"}
+            else:
+                return {"status": "error", "message": "Failed after multiple retries"}
+    return {"status": "error", "message": "Failed after all alert retries"}
+
+@cached(ttl=config.CACHE_TTL_ALERTS, key_builder=lambda *args, **kwargs: "regions", namespace="alerts")
+async def get_regions(bot: Bot) -> Optional[Dict[str, Any]]:
+    """ Получает список регионов. """
+    if not config.UKRAINEALARM_API_TOKEN:
+        logger.error("UkraineAlarm API token (UKRAINEALARM_API_TOKEN) is not configured.")
+        return {"status": "error", "message": "API token not configured"}
+
+    headers = {"Authorization": f"Bearer {config.UKRAINEALARM_API_TOKEN}"}
     last_exception = None
 
-    logger.info(f"Requesting UkraineAlarm alerts from {UKRAINEALARM_API_URL}")
-    async with aiohttp.ClientSession() as session:
-        for attempt in range(MAX_RETRIES):
-            try:
-                logger.debug(f"Attempt {attempt + 1}/{MAX_RETRIES} to fetch UA alerts")
-                async with session.get(UKRAINEALARM_API_URL, headers=headers, timeout=config.API_REQUEST_TIMEOUT) as response:
-                    if response.status == 200:
-                        try:
-                            data = await response.json()
-                            logger.debug(f"UA Alerts response: {data}")
-                            return data
-                        except aiohttp.ContentTypeError:
-                            logger.error(f"Attempt {attempt + 1}: Failed to decode JSON from UA Alerts. Response: {await response.text()}")
-                            return None
-                    elif response.status == 401:
-                        logger.error(f"Attempt {attempt + 1}: Invalid UA Alerts API key (401).")
-                        return None
-                    elif response.status == 429:
-                        last_exception = aiohttp.ClientResponseError(
-                            response.request_info, response.history,
-                            status=429, message="Rate limit exceeded"
-                        )
-                        logger.warning(f"Attempt {attempt + 1}: UA Alerts RateLimit Error (429). Retrying...")
-                    elif response.status >= 500:
-                        last_exception = aiohttp.ClientResponseError(
-                            response.request_info, response.history,
-                            status=response.status, message=f"Server error {response.status}"
-                        )
-                        logger.warning(f"Attempt {attempt + 1}: UA Alerts Server Error {response.status}. Retrying...")
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"Attempt {attempt + 1}: UA Alerts Error {response.status}. Response: {error_text}")
-                        return None
+    for attempt in range(config.MAX_RETRIES):
+        try:
+            logger.debug(f"Attempt {attempt + 1}/{config.MAX_RETRIES} to fetch regions")
+            async with bot.session.session.get(UA_REGION_API_URL, headers=headers, timeout=config.API_REQUEST_TIMEOUT) as response:
+                if response.status == 200:
+                    try:
+                        data = await response.json()
+                        logger.debug(f"UkraineAlarm regions response: {data}")
+                        return data
+                    except aiohttp.ContentTypeError:
+                        logger.error(f"Attempt {attempt + 1}: Failed to decode JSON from UkraineAlarm. Response: {await response.text()}")
+                        return {"status": "error", "message": "Invalid JSON response"}
+                elif response.status == 401:
+                    logger.error(f"Attempt {attempt + 1}: Invalid UkraineAlarm API token (401).")
+                    return {"status": "error", "message": "Invalid API token"}
+                elif response.status >= 500 or response.status == 429:
+                    last_exception = aiohttp.ClientResponseError(
+                        response.request_info, response.history,
+                        status=response.status, message=f"Server error {response.status}"
+                    )
+                    logger.warning(f"Attempt {attempt + 1}: UkraineAlarm Server/RateLimit Error {response.status}. Retrying...")
+                else:
+                    error_text = await response.text()
+                    logger.error(f"Attempt {attempt + 1}: UkraineAlarm Error {response.status}. Response: {error_text[:200]}")
+                    return {"status": "error", "message": f"Client error {response.status}"}
 
-            except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
-                last_exception = e
-                logger.warning(f"Attempt {attempt + 1}: Network error connecting to UA Alerts: {e}. Retrying...")
-            except Exception as e:
-                logger.exception(f"Attempt {attempt + 1}: An unexpected error occurred fetching UA alerts: {e}", exc_info=True)
-                return None
+        except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
+            last_exception = e
+            logger.warning(f"Attempt {attempt + 1}: Network error connecting to UkraineAlarm: {e}. Retrying...")
+        except Exception as e:
+            logger.exception(f"Attempt {attempt + 1}: An unexpected error occurred fetching regions: {e}", exc_info=True)
+            return {"status": "error", "message": "Internal processing error"}
 
-            if attempt < MAX_RETRIES - 1:
-                delay = INITIAL_DELAY * (2 ** attempt)
-                logger.info(f"Waiting {delay} seconds before next UA alerts retry...")
-                await asyncio.sleep(delay)
-            else:
-                logger.error(f"All {MAX_RETRIES} attempts failed for UA alerts. Last error: {last_exception!r}")
-                return None
-    return None
-
-def format_alerts_message(alerts_data: Optional[List[Dict[str, Any]]]) -> str:
-    """
-    Форматирует ответ API тревог в сообщение для пользователя.
-
-    Args:
-        alerts_data: Список данных об алертах от API или None.
-
-    Returns:
-        Строка с сообщением о статусе тревог.
-    """
-    now_kyiv = datetime.now(TZ_KYIV).strftime('%H:%M %d.%m.%Y')
-    header = f"<b>🚨 Статус тривог по Україні станом на {now_kyiv}:</b>\n"
-
-    if alerts_data is None:
-        return header + "\n⚠️ Не вдалося отримати дані. Спробуйте пізніше."
-
-    if isinstance(alerts_data, dict) and "error" in alerts_data:
-        error_code = alerts_data.get("error")
-        error_msg = alerts_data.get("message", "Невідома помилка API")
-        if error_code == 401:
-            return header + "\nПомилка: Недійсний токен доступу до API тривог."
-        elif error_code == 429:
-            return header + "\nПомилка: Перевищено ліміт запитів до API тривог. Спробуйте за хвилину."
+        if attempt < config.MAX_RETRIES - 1:
+            delay = config.INITIAL_DELAY * (2 ** attempt)
+            logger.info(f"Waiting {delay} seconds before next region retry...")
+            await asyncio.sleep(delay)
         else:
-            return header + f"\nПомилка API ({error_code}): {error_msg}. Спробуйте пізніше."
+            logger.error(f"All {config.MAX_RETRIES} attempts failed for regions. Last error: {last_exception!r}")
+            if isinstance(last_exception, aiohttp.ClientResponseError):
+                return {"status": "error", "message": f"Server error {last_exception.status} after retries"}
+            elif isinstance(last_exception, aiohttp.ClientConnectorError):
+                return {"status": "error", "message": "Network error after retries"}
+            elif isinstance(last_exception, asyncio.TimeoutError):
+                return {"status": "error", "message": "Timeout error after retries"}
+            else:
+                return {"status": "error", "message": "Failed after multiple retries"}
+    return {"status": "error", "message": "Failed after all region retries"}
 
-    if not alerts_data:
-        return header + "\n🟢 Наразі тривог немає. Все спокійно."
+def format_alert_message(alert_data: List[Dict[str, Any]], region_name: str = "") -> str:
+    """ Форматирует сообщение о тревогах. """
+    try:
+        if not isinstance(alert_data, list):
+            api_message = alert_data.get("message", "Невідома помилка")
+            return f"😥 Не вдалося отримати дані тривог: {api_message}"
 
-    active_regions = {}
-    for region_alert_info in alerts_data:
-        region_name = region_alert_info.get("regionName", "Невідомий регіон")
-        if region_name not in active_regions:
-            active_regions[region_name] = []
-        for alert in region_alert_info.get("activeAlerts", []):
-            alert_type = alert.get("type", "UNKNOWN")
-            if alert_type not in active_regions[region_name]:
-                active_regions[region_name].append(alert_type)
+        active_alerts = [
+            alert for alert in alert_data
+            if alert.get("status") == "active" or alert.get("type") == "air_raid"
+        ]
 
-    if not active_regions:
-        return header + "\n🟢 Наразі тривог на рівні областей немає (можливі тривоги в окремих громадах)."
+        current_time = datetime.now(pytz.timezone('Europe/Kyiv')).strftime("%H:%M %d.%m.%Y")
+        region_display = f" у регіоні {region_name}" if region_name else " по Україні"
+        message_lines = [f"🚨 <b>Статус тривог{region_display} станом на {current_time}:</b>\n"]
 
-    message_lines = [header]
-    for region_name in sorted(active_regions.keys()):
-        alerts_str = ", ".join([ALERT_TYPE_EMOJI.get(atype, atype) for atype in active_regions[region_name]])
-        message_lines.append(f"🔴 <b>{region_name}:</b> {alerts_str}")
+        if not active_alerts:
+            message_lines.append("🟢 Наразі тривог немає. Все спокійно.")
+        else:
+            for alert in active_alerts:
+                region = alert.get("regionName", "Невідомий регіон")
+                alert_type = alert.get("type", "невідома тривога").replace("air_raid", "повітряна тривога")
+                updated_at = alert.get("lastUpdate", "невідомо")
+                try:
+                    updated_time = datetime.fromisoformat(updated_at.replace("Z", "+00:00")).astimezone(pytz.timezone('Europe/Kyiv')).strftime("%H:%M %d.%m")
+                except (ValueError, TypeError):
+                    updated_time = "невідомо"
+                message_lines.append(f"🔴 {region}: {alert_type} (оновлено: {updated_time})")
 
-    message_lines.append("\n<tg-spoiler>Джерело: api.ukrainealarm.com</tg-spoiler>")
-    message_lines.append("🙏 Будь ласка, бережіть себе та прямуйте в укриття!")
-
-    return "\n".join(message_lines)
+        return "\n".join(message_lines)
+    except Exception as e:
+        logger.exception(f"Error formatting alert message: {e}")
+        return "😥 Помилка обробки даних тривог."

@@ -1,7 +1,6 @@
 # src/modules/currency/service.py
 
 import logging
-import aiohttp
 import asyncio
 from typing import Optional, Dict, Any, List
 from aiogram import Bot
@@ -30,58 +29,57 @@ async def get_pb_exchange_rates(bot: Bot, cash: bool = True) -> Optional[List[Di
     url = PB_API_URL_CASH if cash else PB_API_URL_NONCASH
     last_exception = None
 
-    async with aiohttp.ClientSession() as session:
-        for attempt in range(MAX_RETRIES):
-            try:
-                logger.debug(f"Attempt {attempt + 1}/{MAX_RETRIES} to fetch PB rates (cash={cash})")
-                async with session.get(url, timeout=config.API_REQUEST_TIMEOUT) as response:
-                    if response.status == 200:
-                        try:
-                            data = await response.json()
-                            logger.info(f"PB API response: {data}")
-                            filtered_data = [
-                                item for item in data
-                                if item.get("ccy") in TARGET_CURRENCIES
-                            ]
-                            if not filtered_data:
-                                logger.warning(f"No valid currency data found in PB response for cash={cash}")
-                                return None
-                            logger.info(f"Returning {len(filtered_data)} currency rates from API or cache")
-                            return filtered_data
-                        except aiohttp.ContentTypeError:
-                            logger.error(f"Attempt {attempt + 1}: Failed to decode JSON from PB. Response: {await response.text()}")
+    for attempt in range(MAX_RETRIES):
+        try:
+            logger.debug(f"Attempt {attempt + 1}/{MAX_RETRIES} to fetch PB rates (cash={cash})")
+            async with bot.session.session.get(url, timeout=config.API_REQUEST_TIMEOUT) as response:
+                if response.status == 200:
+                    try:
+                        data = await response.json()
+                        logger.info(f"PB API response: {data}")
+                        filtered_data = [
+                            item for item in data
+                            if item.get("ccy") in TARGET_CURRENCIES
+                        ]
+                        if not filtered_data:
+                            logger.warning(f"No valid currency data found in PB response for cash={cash}")
                             return None
-                    elif response.status == 429:
-                        last_exception = aiohttp.ClientResponseError(
-                            response.request_info, response.history,
-                            status=429, message="Rate limit exceeded"
-                        )
-                        logger.warning(f"Attempt {attempt + 1}: PB RateLimit Error (429). Retrying...")
-                    elif response.status >= 500:
-                        last_exception = aiohttp.ClientResponseError(
-                            response.request_info, response.history,
-                            status=response.status, message=f"Server error {response.status}"
-                        )
-                        logger.warning(f"Attempt {attempt + 1}: PB Server Error {response.status}. Retrying...")
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"Attempt {attempt + 1}: PB Error {response.status}. Response: {error_text[:200]}")
+                        logger.info(f"Returning {len(filtered_data)} currency rates from API or cache")
+                        return filtered_data
+                    except aiohttp.ContentTypeError:
+                        logger.error(f"Attempt {attempt + 1}: Failed to decode JSON from PB. Response: {await response.text()}")
                         return None
+                elif response.status == 429:
+                    last_exception = aiohttp.ClientResponseError(
+                        response.request_info, response.history,
+                        status=429, message="Rate limit exceeded"
+                    )
+                    logger.warning(f"Attempt {attempt + 1}: PB RateLimit Error (429). Retrying...")
+                elif response.status >= 500:
+                    last_exception = aiohttp.ClientResponseError(
+                        response.request_info, response.history,
+                        status=response.status, message=f"Server error {response.status}"
+                    )
+                    logger.warning(f"Attempt {attempt + 1}: PB Server Error {response.status}. Retrying...")
+                else:
+                    error_text = await response.text()
+                    logger.error(f"Attempt {attempt + 1}: PB Error {response.status}. Response: {error_text[:200]}")
+                    return None
 
-            except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
-                last_exception = e
-                logger.warning(f"Attempt {attempt + 1}: Network error connecting to PB: {e}. Retrying...")
-            except Exception as e:
-                logger.exception(f"Attempt {attempt + 1}: An unexpected error occurred fetching PB rates: {e}", exc_info=True)
-                return None
+        except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
+            last_exception = e
+            logger.warning(f"Attempt {attempt + 1}: Network error connecting to PB: {e}. Retrying...")
+        except Exception as e:
+            logger.exception(f"Attempt {attempt + 1}: An unexpected error occurred fetching PB rates: {e}", exc_info=True)
+            return None
 
-            if attempt < MAX_RETRIES - 1:
-                delay = INITIAL_DELAY * (2 ** attempt)
-                logger.info(f"Waiting {delay} seconds before next PB retry...")
-                await asyncio.sleep(delay)
-            else:
-                logger.error(f"All {MAX_RETRIES} attempts failed for PB rates (cash={cash}). Last error: {last_exception!r}")
-                return None
+        if attempt < MAX_RETRIES - 1:
+            delay = INITIAL_DELAY * (2 ** attempt)
+            logger.info(f"Waiting {delay} seconds before next PB retry...")
+            await asyncio.sleep(delay)
+        else:
+            logger.error(f"All {MAX_RETRIES} attempts failed for PB rates (cash={cash}). Last error: {last_exception!r}")
+            return None
     return None
 
 def format_rates_message(rates_data: List[Dict[str, Any]], cash: bool = True) -> str:
