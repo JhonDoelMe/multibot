@@ -3,42 +3,57 @@
 import logging
 import aiohttp
 import asyncio
-from typing import Optional, Dict, Any, List
+from typing import Optional, List, Dict, Any
+from datetime import datetime
 from aiogram import Bot
+import pytz
 
 from src import config
 
 logger = logging.getLogger(__name__)
 
 # Константы API
-UKRAINEALARM_API_URL = "https://alerts.in.ua/api/v2/alerts/active.json"
+UKRAINEALARM_API_URL = "https://api.ukrainealarm.com/api/v3/alerts"
 
 # Параметры Retry
 MAX_RETRIES = 3
 INITIAL_DELAY = 1  # Секунда
 
-# Эмодзи для типов тревог
+# Часовой пояс Украины
+TZ_KYIV = pytz.timezone('Europe/Kyiv')
+
+# Маппинг типов тревог на эмодзи
 ALERT_TYPE_EMOJI = {
-    "air": "✈️",
-    "artillery": "💥",
-    "urban": "🏙️",
-    "chemical": "☣️",
-    "nuclear": "☢️"
+    "AIR": "🚨",
+    "ARTILLERY": "💣",
+    "URBAN_FIGHTS": "💥",
+    "CHEMICAL": "☣️",
+    "NUCLEAR": "☢️",
+    "INFO": "ℹ️",
+    "UNKNOWN": "❓"
 }
 
-async def get_active_alerts(bot: Bot) -> Optional[Dict[str, Any]]:
-    """ Получает данные об активных тревогах в Украине. """
-    if not config.UKRAINEALARM_API_KEY:
-        logger.error("UkraineAlarm API key (UKRAINEALARM_API_KEY) is not configured.")
+async def get_active_alerts(bot: Bot) -> Optional[List[Dict[str, Any]]]:
+    """
+    Получает список активных тревог с API UkraineAlarm.
+
+    Args:
+        bot: Экземпляр бота Aiogram (для совместимости с текущей архитектурой).
+
+    Returns:
+        Список словарей с данными об активных тревогах или None при ошибке.
+    """
+    if not config.UKRAINEALARM_API_TOKEN:
+        logger.error("UkraineAlarm API token (UKRAINEALARM_API_TOKEN) is not configured.")
         return None
 
     headers = {
-        "X-API-Key": config.UKRAINEALARM_API_KEY,
+        "Authorization": config.UKRAINEALARM_API_TOKEN,
         "Accept": "application/json"
     }
     last_exception = None
 
-    logger.info("Requesting UA alerts...")
+    logger.info(f"Requesting UkraineAlarm alerts from {UKRAINEALARM_API_URL}")
     async with aiohttp.ClientSession() as session:
         for attempt in range(MAX_RETRIES):
             try:
@@ -69,7 +84,7 @@ async def get_active_alerts(bot: Bot) -> Optional[Dict[str, Any]]:
                         logger.warning(f"Attempt {attempt + 1}: UA Alerts Server Error {response.status}. Retrying...")
                     else:
                         error_text = await response.text()
-                        logger.error(f"Attempt {attempt + 1}: UA Alerts Error {response.status}. Response: {error_text[:200]}")
+                        logger.error(f"Attempt {attempt + 1}: UA Alerts Error {response.status}. Response: {error_text}")
                         return None
 
             except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
@@ -88,24 +103,54 @@ async def get_active_alerts(bot: Bot) -> Optional[Dict[str, Any]]:
                 return None
     return None
 
-def format_alerts_message(alerts_data: Dict[str, Any]) -> str:
-    """ Форматирует сообщение с информацией о тревогах. """
-    try:
-        if not alerts_data or not isinstance(alerts_data, dict):
-            return "⚠️ Дані про тривоги відсутні або некоректні. Спробуйте пізніше."
+def format_alerts_message(alerts_data: Optional[List[Dict[str, Any]]]) -> str:
+    """
+    Форматирует ответ API тревог в сообщение для пользователя.
 
-        alerts = alerts_data.get("alerts", [])
-        if not alerts:
-            return "🟢 Наразі немає активних тривог в Україні."
+    Args:
+        alerts_data: Список данных об алертах от API или None.
 
-        message_lines = ["<b>⚠️ Активні тривоги в Україні:</b>\n"]
-        for alert in alerts:
-            region = alert.get("region_title", "Невідомий регіон")
-            alert_type = alert.get("type", "невідомий").lower()
-            emoji = ALERT_TYPE_EMOJI.get(alert_type, "❓")
-            last_updated = alert.get("updated_at", "невідомо")
-            message_lines.append(f"{emoji} {region} ({alert_type}) — Оновлено: {last_updated}")
-        return "\n".join(message_lines)
-    except Exception as e:
-        logger.exception(f"Error formatting alerts message: {e}")
-        return "😥 Помилка обробки даних про тривоги."
+    Returns:
+        Строка с сообщением о статусе тревог.
+    """
+    now_kyiv = datetime.now(TZ_KYIV).strftime('%H:%M %d.%m.%Y')
+    header = f"<b>🚨 Статус тривог по Україні станом на {now_kyiv}:</b>\n"
+
+    if alerts_data is None:
+        return header + "\n⚠️ Не вдалося отримати дані. Спробуйте пізніше."
+
+    if isinstance(alerts_data, dict) and "error" in alerts_data:
+        error_code = alerts_data.get("error")
+        error_msg = alerts_data.get("message", "Невідома помилка API")
+        if error_code == 401:
+            return header + "\nПомилка: Недійсний токен доступу до API тривог."
+        elif error_code == 429:
+            return header + "\nПомилка: Перевищено ліміт запитів до API тривог. Спробуйте за хвилину."
+        else:
+            return header + f"\nПомилка API ({error_code}): {error_msg}. Спробуйте пізніше."
+
+    if not alerts_data:
+        return header + "\n🟢 Наразі тривог немає. Все спокійно."
+
+    active_regions = {}
+    for region_alert_info in alerts_data:
+        region_name = region_alert_info.get("regionName", "Невідомий регіон")
+        if region_name not in active_regions:
+            active_regions[region_name] = []
+        for alert in region_alert_info.get("activeAlerts", []):
+            alert_type = alert.get("type", "UNKNOWN")
+            if alert_type not in active_regions[region_name]:
+                active_regions[region_name].append(alert_type)
+
+    if not active_regions:
+        return header + "\n🟢 Наразі тривог на рівні областей немає (можливі тривоги в окремих громадах)."
+
+    message_lines = [header]
+    for region_name in sorted(active_regions.keys()):
+        alerts_str = ", ".join([ALERT_TYPE_EMOJI.get(atype, atype) for atype in active_regions[region_name]])
+        message_lines.append(f"🔴 <b>{region_name}:</b> {alerts_str}")
+
+    message_lines.append("\n<tg-spoiler>Джерело: api.ukrainealarm.com</tg-spoiler>")
+    message_lines.append("🙏 Будь ласка, бережіть себе та прямуйте в укриття!")
+
+    return "\n".join(message_lines)
