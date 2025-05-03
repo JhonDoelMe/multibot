@@ -15,6 +15,48 @@ logger = logging.getLogger(__name__)
 OWM_API_URL = "https://api.openweathermap.org/data/2.5/weather"
 OWM_FORECAST_URL = "https://api.openweathermap.org/data/2.5/forecast"
 
+# --- Новая функция для погоды по координатам ---
+async def get_weather_data_by_coords(latitude: float, longitude: float) -> Optional[Dict[str, Any]]:
+    """ Получает данные о погоде по координатам с OpenWeatherMap с повторными попытками. """
+    if not config.WEATHER_API_KEY:
+        logger.error("OpenWeatherMap API key (WEATHER_API_KEY) is not configured.")
+        return {"cod": 500, "message": "API key not configured"}
+
+    params = {
+        "lat": latitude, # <<< Используем lat
+        "lon": longitude, # <<< Используем lon
+        "appid": config.WEATHER_API_KEY,
+        "units": "metric",
+        "lang": "uk",
+    }
+    last_exception = None
+    api_url = OWM_API_URL # Используем тот же URL текущей погоды
+
+    for attempt in range(MAX_RETRIES):
+        try:
+            logger.debug(f"Attempt {attempt + 1}/{MAX_RETRIES} to fetch weather for coords ({latitude}, {longitude})")
+            async with aiohttp.ClientSession() as session:
+                async with session.get(api_url, params=params, timeout=10) as response:
+                    # Логика обработки ответа и ошибок остается такой же, как в get_weather_data
+                    if response.status == 200:
+                        try: data = await response.json(); logger.debug(f"OWM Weather response: {data}"); return data
+                        except aiohttp.ContentTypeError: logger.error(f"... Failed to decode JSON ..."); return {"cod": 500, "message": "Invalid JSON response"}
+                    # Для координат не бывает 404 "Город не найден", но могут быть другие ошибки
+                    elif response.status == 401: logger.error(f"... Invalid OWM API key (401)."); return {"cod": 401, "message": "Invalid API key"}
+                    elif 400 <= response.status < 500 and response.status != 429: error_text = await response.text(); logger.error(f"... OWM Client Error {response.status}. Resp: {error_text[:200]}"); return {"cod": response.status, "message": f"Client error {response.status}"}
+                    elif response.status >= 500 or response.status == 429: last_exception = aiohttp.ClientResponseError(response.request_info, response.history, status=response.status, message=f"Server error {response.status}"); logger.warning(f"... OWM Server/RateLimit Error {response.status}. Retrying...")
+                    else: logger.error(f"... Unexpected status {response.status} from OWM Weather."); last_exception = Exception(f"Unexpected status {response.status}")
+        except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e: last_exception = e; logger.warning(f"... Network error: {e}. Retrying...")
+        except Exception as e: logger.exception(f"... Unexpected error fetching weather by coords: {e}", exc_info=True); return {"cod": 500, "message": "Internal processing error"}
+        if attempt < MAX_RETRIES - 1: delay = INITIAL_DELAY * (2 ** attempt); logger.info(f"Waiting {delay}s before next weather retry..."); await asyncio.sleep(delay)
+        else: # ... (обработка ошибок после всех попыток, как в get_weather_data) ...
+             logger.error(f"All {MAX_RETRIES} attempts failed for weather coords ({latitude}, {longitude}). Last error: {last_exception!r}")
+             if isinstance(last_exception, aiohttp.ClientResponseError): return {"cod": last_exception.status, "message": f"Server error {last_exception.status} after retries"}
+             elif isinstance(last_exception, aiohttp.ClientConnectorError): return {"cod": 503, "message": "Network error after retries"}
+             elif isinstance(last_exception, asyncio.TimeoutError): return {"cod": 504, "message": "Timeout error after retries"}
+             else: return {"cod": 500, "message": "Failed after multiple retries"}
+    return {"cod": 500, "message": "Failed after all weather retries"}
+
 # Часовой пояс и параметры Retry
 TZ_KYIV = pytz.timezone('Europe/Kyiv')
 MAX_RETRIES = 3
