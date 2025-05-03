@@ -25,7 +25,8 @@ TARGET_CURRENCIES = {"USD", "EUR"}
 @cached(ttl=config.CACHE_TTL_CURRENCY, key_builder=lambda *args, **kwargs: f"rates:{'cash' if kwargs.get('cash', True) else 'noncash'}", namespace="currency")
 async def get_pb_exchange_rates(bot: Bot, cash: bool = True) -> Optional[List[Dict[str, Any]]]:
     """ Получает курсы валют ПриватБанка (наличные или безналичные). """
-    logger.info(f"Requesting PB {'cash' if cash else 'noncash'} rates...")
+    cache_key = f"rates:{'cash' if cash else 'noncash'}"
+    logger.info(f"Requesting PB {'cash' if cash else 'noncash'} rates (cache key: {cache_key})...")
     url = PB_API_URL_CASH if cash else PB_API_URL_NONCASH
     last_exception = None
 
@@ -37,11 +38,15 @@ async def get_pb_exchange_rates(bot: Bot, cash: bool = True) -> Optional[List[Di
                     if response.status == 200:
                         try:
                             data = await response.json()
-                            logger.debug(f"PB API response: {data}")
+                            logger.info(f"PB API response: {data}")
                             filtered_data = [
                                 item for item in data
                                 if item.get("ccy") in TARGET_CURRENCIES
                             ]
+                            if not filtered_data:
+                                logger.warning(f"No valid currency data found in PB response for cash={cash}")
+                                return None
+                            logger.info(f"Returning {len(filtered_data)} currency rates from API or cache")
                             return filtered_data
                         except aiohttp.ContentTypeError:
                             logger.error(f"Attempt {attempt + 1}: Failed to decode JSON from PB. Response: {await response.text()}")
