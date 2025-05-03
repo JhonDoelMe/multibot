@@ -35,8 +35,8 @@ API_REQUEST_TIMEOUT = 15  # Таймаут для HTTP-запросов к API �
 # Настройки кэширования (aiocache)
 CACHE_BACKEND = os.getenv("CACHE_BACKEND", "memory")  # "memory" или "redis"
 CACHE_REDIS_URL = os.getenv("CACHE_REDIS_URL", "redis://localhost:6379/0")
-CACHE_TTL_ALERTS = 60  # TTL для кэша тревог (1 минута) - UkraineAlarm
-CACHE_TTL_ALERTS_BACKUP = 90 # TTL для резервного кэша тревог (1.5 минуты) <<< ДОБАВЛЕНО
+CACHE_TTL_ALERTS = 30  # TTL для кэша тревог (1 минута) - UkraineAlarm
+CACHE_TTL_ALERTS_BACKUP = 30 # TTL для резервного кэша тревог (1.5 минуты) <<< ДОБАВЛЕНО
 CACHE_TTL_WEATHER = 600  # TTL для кэша погоды (10 минут)
 CACHE_TTL_CURRENCY = 3600  # TTL для кэша валют (1 час)
 
