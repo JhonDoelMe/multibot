@@ -70,7 +70,7 @@ async def get_weather_data(bot: Bot, city_name: str) -> Optional[Dict[str, Any]]
                     elif response.status == 401:
                         logger.error(f"Attempt {attempt + 1}: Invalid OWM API key (401).")
                         return {"cod": 401, "message": "Invalid API key"}
-                    elif 400 <= response.status < 500:
+                    elif 400 <= response.status < 500 and response.status != 429:
                         error_text = await response.text()
                         logger.error(f"Attempt {attempt + 1}: OWM Client Error {response.status}. Response: {error_text[:200]}")
                         return {"cod": response.status, "message": f"Client error {response.status}"}
@@ -97,15 +97,8 @@ async def get_weather_data(bot: Bot, city_name: str) -> Optional[Dict[str, Any]]
             await asyncio.sleep(delay)
         else:
             logger.error(f"All {MAX_RETRIES} attempts failed for weather {city_name}. Last error: {last_exception!r}")
-            if isinstance(last_exception, aiohttp.ClientResponseError):
-                return {"cod": last_exception.status, "message": f"Server error {last_exception.status} after retries"}
-            elif isinstance(last_exception, aiohttp.ClientConnectorError):
-                return {"cod": 503, "message": "Network error after retries"}
-            elif isinstance(last_exception, asyncio.TimeoutError):
-                return {"cod": 504, "message": "Timeout error after retries"}
-            else:
-                return {"cod": 500, "message": "Failed after multiple retries"}
-    return {"cod": 500, "message": "Failed after all weather retries"}
+            return None
+    return None
 
 @cached(ttl=config.CACHE_TTL_WEATHER, key_builder=lambda *args, **kwargs: f"weather:coords:{kwargs.get('latitude', 0):.4f}:{kwargs.get('longitude', 0):.4f}", namespace="weather")
 async def get_weather_data_by_coords(bot: Bot, latitude: float, longitude: float) -> Optional[Dict[str, Any]]:
@@ -166,15 +159,8 @@ async def get_weather_data_by_coords(bot: Bot, latitude: float, longitude: float
             await asyncio.sleep(delay)
         else:
             logger.error(f"All {MAX_RETRIES} attempts failed for coords ({latitude:.4f}, {longitude:.4f}). Last error: {last_exception!r}")
-            if isinstance(last_exception, aiohttp.ClientResponseError):
-                return {"cod": last_exception.status, "message": f"Server error {last_exception.status} after retries"}
-            elif isinstance(last_exception, aiohttp.ClientConnectorError):
-                return {"cod": 503, "message": "Network error after retries"}
-            elif isinstance(last_exception, asyncio.TimeoutError):
-                return {"cod": 504, "message": "Timeout error after retries"}
-            else:
-                return {"cod": 500, "message": "Failed after multiple retries"}
-    return {"cod": 500, "message": "Failed after all weather retries"}
+            return None
+    return None
 
 @cached(ttl=config.CACHE_TTL_WEATHER, key_builder=lambda *args, **kwargs: f"forecast:city:{kwargs.get('city_name', '').lower()}", namespace="weather")
 async def get_5day_forecast(bot: Bot, city_name: str) -> Optional[Dict[str, Any]]:
@@ -238,15 +224,8 @@ async def get_5day_forecast(bot: Bot, city_name: str) -> Optional[Dict[str, Any]
             await asyncio.sleep(delay)
         else:
             logger.error(f"All {MAX_RETRIES} attempts failed for forecast {city_name}. Last error: {last_exception!r}")
-            if isinstance(last_exception, aiohttp.ClientResponseError):
-                return {"cod": str(last_exception.status), "message": f"Server error {last_exception.status} after retries"}
-            elif isinstance(last_exception, aiohttp.ClientConnectorError):
-                return {"cod": "503", "message": "Network error after retries"}
-            elif isinstance(last_exception, asyncio.TimeoutError):
-                return {"cod": "504", "message": "Timeout error after retries"}
-            else:
-                return {"cod": "500", "message": "Failed after multiple retries"}
-    return {"cod": "500", "message": "Failed after all forecast retries"}
+            return None
+    return None
 
 def format_weather_message(weather_data: Dict[str, Any], city_display_name: str) -> str:
     try:
@@ -341,3 +320,4 @@ def format_forecast_message(forecast_data: Dict[str, Any], city_display_name: st
     except Exception as e:
         logger.exception(f"Error formatting forecast msg: {e}")
         return f"Помилка обробки прогнозу для м. {city_display_name.capitalize()}."
+}

@@ -56,7 +56,9 @@ async def _get_and_show_weather(
     # Обработка ответа API
     if weather_data and (weather_data.get("cod") == 200 or str(weather_data.get("cod")) == "200"):
         actual_city_name_from_api = weather_data.get("name");
-        if coords:
+        if coords and actual_city_name_from_api: # Проверяем, что есть название города
+            city_display_name = f"за вашими координатами, м. {actual_city_name_from_api}"
+        elif coords:
             city_display_name = "за вашими координатами"
         elif city_input:
             city_display_name = city_input.capitalize()
