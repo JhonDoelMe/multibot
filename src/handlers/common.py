@@ -4,7 +4,7 @@ import logging
 from typing import Union
 from aiogram import Bot, Router, F
 from aiogram.types import Message, CallbackQuery
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, StateFilter # Добавляем StateFilter
 from aiogram.fsm.context import FSMContext
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,34 +13,27 @@ from src.keyboards.reply_main import (
     BTN_ALERTS_BACKUP, BTN_WEATHER_BACKUP,
     BTN_LOCATION_MAIN, BTN_LOCATION_BACKUP
 )
-from src.modules.weather.handlers import weather_entry_point, handle_location as handle_main_weather_location
+# Импортируем функции напрямую, а не весь модуль handlers, если это возможно
+from src.modules.weather.handlers import weather_entry_point, process_main_geolocation_button, WeatherStates as MainWeatherStates
 from src.modules.currency.handlers import currency_entry_point
 from src.modules.alert.handlers import alert_entry_point
 from src.modules.alert_backup.handlers import alert_backup_entry_point
-from src.modules.weather_backup.handlers import weather_backup_entry_point, weather_backup_geolocation_entry_point
+from src.modules.weather_backup.handlers import weather_backup_entry_point, weather_backup_geolocation_entry_point, WeatherBackupStates
 from src.db.models import User
 from src.handlers.utils import show_main_menu_message
 
 logger = logging.getLogger(__name__)
 router = Router(name="common-handlers")
-location_router = Router(name="location-handlers")
+location_router = Router(name="location-handlers") # Этот роутер будет обрабатывать геолокацию от кнопок
 
 
 @router.message(CommandStart())
 async def handle_start(message: Message, session: AsyncSession, state: FSMContext):
     # ... (код без изменений) ...
     await state.clear()
-    user_tg = message.from_user
-    if not user_tg:
-        logger.warning("Received /start from a user with no user info (message.from_user is None).")
-        await message.answer("Не вдалося отримати інформацію про користувача. Спробуйте пізніше.")
-        return
-
-    user_id = user_tg.id
-    first_name = user_tg.first_name if user_tg.first_name else "Користувач"
-    last_name = user_tg.last_name
-    username = user_tg.username
-
+    user_tg = message.from_user; # ... (остальной код start без изменений)
+    if not user_tg: logger.warning("Received /start from a user with no user info (message.from_user is None)."); await message.answer("Не вдалося отримати інформацію про користувача. Спробуйте пізніше."); return
+    user_id = user_tg.id; first_name = user_tg.first_name if user_tg.first_name else "Користувач"; last_name = user_tg.last_name; username = user_tg.username
     db_user = None
     try:
         db_user = await session.get(User, user_id)
@@ -51,16 +44,10 @@ async def handle_start(message: Message, session: AsyncSession, state: FSMContex
              if db_user.username != username: db_user.username = username; needs_update = True
              if needs_update: logger.info(f"User {user_id} ('{username}') found. Updating info..."); session.add(db_user)
              else: logger.info(f"User {user_id} ('{username}') found. No info update needed.")
-        else:
-             logger.info(f"User {user_id} ('{username}') not found. Creating..."); new_user = User(user_id=user_id, first_name=first_name, last_name=last_name, username=username); session.add(new_user)
-    except Exception as e:
-        logger.exception(f"DB error during /start for user {user_id}: {e}", exc_info=True); await session.rollback()
-        await message.answer("Виникла помилка під час роботи з базою даних. Будь ласка, спробуйте пізніше."); return
+        else: logger.info(f"User {user_id} ('{username}') not found. Creating..."); new_user = User(user_id=user_id, first_name=first_name, last_name=last_name, username=username); session.add(new_user)
+    except Exception as e: logger.exception(f"DB error during /start for user {user_id}: {e}", exc_info=True); await session.rollback(); await message.answer("Виникла помилка під час роботи з базою даних. Будь ласка, спробуйте пізніше."); return
+    user_name_display = first_name; text = f"Привіт, {user_name_display}! 👋\n\nОберіть опцію на клавіатурі нижче:"; reply_markup = get_main_reply_keyboard(); await message.answer(text=text, reply_markup=reply_markup)
 
-    user_name_display = first_name
-    text = f"Привіт, {user_name_display}! 👋\n\nОберіть опцію на клавіатурі нижче:"
-    reply_markup = get_main_reply_keyboard()
-    await message.answer(text=text, reply_markup=reply_markup)
 
 @router.message(F.text == BTN_WEATHER)
 async def handle_weather_text_request(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
@@ -70,55 +57,42 @@ async def handle_weather_text_request(message: Message, state: FSMContext, sessi
 async def handle_weather_backup_text_request(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
      await weather_backup_entry_point(message, state, session, bot)
 
+# ... (остальные текстовые кнопки без изменений)
 @router.message(F.text == BTN_CURRENCY)
-async def handle_currency_text_request(message: Message, bot: Bot):
-     await currency_entry_point(message, bot)
-
+async def handle_currency_text_request(message: Message, bot: Bot): await currency_entry_point(message, bot)
 @router.message(F.text == BTN_ALERTS)
-async def handle_alert_text_request(message: Message, bot: Bot):
-     await alert_entry_point(message, bot)
-
+async def handle_alert_text_request(message: Message, bot: Bot): await alert_entry_point(message, bot)
 @router.message(F.text == BTN_ALERTS_BACKUP)
-async def handle_alert_backup_text_request(message: Message, bot: Bot):
-     await alert_backup_entry_point(message, bot)
+async def handle_alert_backup_text_request(message: Message, bot: Bot): await alert_backup_entry_point(message, bot)
 
 
-# Обработчики для кнопок геолокации
-@location_router.message(F.location) # Сделаем один обработчик и будем смотреть на reply_to_message внутри
-async def route_geolocation(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
+# --- ОБРАБОТКА ГЕОЛОКАЦИИ ЧЕРЕЗ LOCATION_ROUTER ---
+
+# Этот обработчик будет вызван, если пришла геолокация, И мы НЕ находимся в одном из состояний ожидания геолокации
+# И это был ответ на кнопку BTN_LOCATION_MAIN
+@location_router.message(F.location, F.reply_to_message.text.contains(BTN_LOCATION_MAIN), StateFilter(None, MainWeatherStates.showing_current, MainWeatherStates.showing_forecast, WeatherBackupStates.showing_current, WeatherBackupStates.showing_forecast) )
+async def handle_main_location_button_press(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
+    logger.info(f"User {message.from_user.id} used MAIN location button (detected by reply).")
+    await process_main_geolocation_button(message, state, session, bot)
+
+# Этот обработчик будет вызван, если пришла геолокация, И мы НЕ находимся в одном из состояний ожидания геолокации
+# И это был ответ на кнопку BTN_LOCATION_BACKUP
+@location_router.message(F.location, F.reply_to_message.text.contains(BTN_LOCATION_BACKUP), StateFilter(None, MainWeatherStates.showing_current, MainWeatherStates.showing_forecast, WeatherBackupStates.showing_current, WeatherBackupStates.showing_forecast) )
+async def handle_backup_location_button_press(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
+    logger.info(f"User {message.from_user.id} used BACKUP location button (detected by reply).")
+    await weather_backup_geolocation_entry_point(message, state, session, bot)
+
+# Общий обработчик для геолокации, если она пришла НЕ в состоянии ожидания (waiting_for_location)
+# и НЕ как ответ на специфичную кнопку. По умолчанию - основной сервис.
+# StateFilter(None) означает, что этот хендлер сработает, только если FSM не установлен (None)
+# или можно добавить сюда состояния, в которых мы НЕ ожидаем специальной обработки геолокации.
+# Например, если мы уже показываем погоду (showing_current / showing_forecast в любом из модулей).
+@location_router.message(F.location, StateFilter(None, MainWeatherStates.showing_current, MainWeatherStates.showing_forecast, WeatherBackupStates.showing_current, WeatherBackupStates.showing_forecast))
+async def handle_any_other_location(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
     user_id = message.from_user.id
-    logger.info(f"User {user_id} sent location. Checking for reply_to_message context...")
-    
-    # Проверяем, было ли это ответом на сообщение с текстом кнопки
-    # Заранее убираем request_location=True из текста кнопки, т.к. его нет в reply_to_message
-    # и эмодзи тоже может не быть. Лучше сравнивать по уникальной части текста.
-    
-    # Убираем эмодзи и "(осн.)"/"(резерв)" для более простого сравнения
-    # BTN_LOCATION_MAIN = "📍 Погода по геолокації (осн.)"
-    # BTN_LOCATION_BACKUP = "📍 Погода по геолокації (резерв)"
-    # Уникальная часть "Погода по геолокації"
-    
-    # Более надежный способ - если бы кнопки отправляли команду или устанавливали состояние.
-    # Но для reply кнопок с request_location=True, это сложно.
-
-    # Проверяем, является ли сообщение ответом (reply) на предыдущее сообщение бота
-    if message.reply_to_message and message.reply_to_message.from_user.id == bot.id:
-        replied_text = message.reply_to_message.text
-        logger.info(f"User {user_id} replied with location to bot message: '{replied_text}'")
-        if BTN_LOCATION_MAIN in replied_text: # Проверяем наличие полного текста кнопки
-            logger.info(f"User {user_id} used MAIN location button (based on replied text).")
-            await handle_main_weather_location(message, state, session, bot)
-            return
-        elif BTN_LOCATION_BACKUP in replied_text: # Проверяем наличие полного текста кнопки
-            logger.info(f"User {user_id} used BACKUP location button (based on replied text).")
-            await weather_backup_geolocation_entry_point(message, state, session, bot)
-            return
-        else:
-            logger.info(f"User {user_id} replied with location, but replied text ('{replied_text}') didn't match known location buttons.")
-    else:
-        logger.info(f"User {user_id} sent location not as a reply to a specific bot message, or reply_to_message is None.")
-
-    # Если не удалось определить контекст по reply_to_message, или это не reply,
-    # по умолчанию направляем на основной сервис погоды.
-    logger.info(f"User {user_id}: Defaulting location to main weather service.")
-    await handle_main_weather_location(message, state, session, bot)
+    logger.info(f"User {user_id} sent location directly (not in waiting state, not specific reply). Defaulting to main weather.")
+    # Если это был ответ на какую-то кнопку, но текст не совпал с BTN_LOCATION_MAIN/BACKUP,
+    # этот хендлер все равно может сработать, если нет другого более специфичного.
+    # Для большей точности, можно проверить message.reply_to_message здесь снова,
+    # но это усложнит. Пока оставим так.
+    await process_main_geolocation_button(message, state, session, bot)

@@ -2,34 +2,77 @@
 
 import logging
 import re
-from typing import Union, Optional, Dict, Any
-from aiogram import Bot, Router, F
-from aiogram.types import Message, CallbackQuery
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from src.db.models import User
-from .keyboard import (
-    get_weather_actions_keyboard, CALLBACK_WEATHER_OTHER_CITY, CALLBACK_WEATHER_REFRESH,
-    get_weather_enter_city_back_keyboard, CALLBACK_WEATHER_BACK_TO_MAIN,
-    get_save_city_keyboard, CALLBACK_WEATHER_SAVE_CITY_YES, CALLBACK_WEATHER_SAVE_CITY_NO,
-    CALLBACK_WEATHER_FORECAST_5D, CALLBACK_WEATHER_SHOW_CURRENT, get_forecast_keyboard
-)
-from .service import (
-    get_weather_data, format_weather_message,
-    get_5day_forecast, format_forecast_message,
-    get_weather_data_by_coords
-)
-from src.handlers.utils import show_main_menu_message
+# ... (другие импорты остаются) ...
+from aiogram import Bot, Router, F, MagicFilter # Добавляем MagicFilter
+from aiogram.filters import StateFilter # Для фильтрации по None состоянию
+# ...
 
 logger = logging.getLogger(__name__)
-router = Router(name="weather-module") # Оставляем роутер для других обработчиков этого модуля
+router = Router(name="weather-module")
 
 class WeatherStates(StatesGroup):
     waiting_for_city = State()
     waiting_for_save_decision = State()
 
+# ... (_get_and_show_weather, weather_entry_point, handle_city_input без изменений в этой части) ...
+# Но в weather_entry_point, когда нет preferred_city, устанавливается WeatherStates.waiting_for_city
+
+# ИЗМЕНЕНИЕ: Возвращаем декоратор, но с фильтром по состоянию FSM
+# Этот обработчик сработает, если мы в состоянии WeatherStates.waiting_for_city И пришла локация
+@router.message(WeatherStates.waiting_for_city, F.location)
+async def handle_location_when_waiting(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
+    """Обрабатывает геолокацию, когда бот ее ожидает для основного сервиса."""
+    if message.location:
+        lat = message.location.latitude
+        lon = message.location.longitude
+        user_id = message.from_user.id
+        logger.info(f"MAIN weather module: handle_location_when_waiting for user {user_id}: lat={lat}, lon={lon}")
+        # Состояние уже waiting_for_city, после получения погоды оно сбросится или изменится
+        await _get_and_show_weather(bot, message, state, session, coords={"lat": lat, "lon": lon})
+    else: # На всякий случай, хотя фильтр F.location должен это покрывать
+        logger.warning(f"User {message.from_user.id}: handle_location_when_waiting (main weather) called without message.location.")
+        await message.reply("Не вдалося отримати вашу геолокацію.")
+
+
+# Эта функция теперь будет вызываться только по кнопке "📍 Погода по геолокації (осн.)"
+# Она не должна быть message handler-ом сама по себе, если мы хотим избежать конфликтов.
+# common.py будет ее вызывать.
+async def process_main_geolocation_button(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
+    """Обрабатывает геолокацию, присланную по кнопке 'Погода по геолокації (осн.)'."""
+    if message.location:
+        lat = message.location.latitude
+        lon = message.location.longitude
+        user_id = message.from_user.id
+        logger.info(f"MAIN weather module: process_main_geolocation_button for user {user_id}: lat={lat}, lon={lon}")
+        
+        current_fsm_state_name = await state.get_state()
+        if current_fsm_state_name is not None: # Очищаем любое предыдущее состояние, т.к. это прямой запрос
+            logger.info(f"User {user_id}: Clearing FSM state ({current_fsm_state_name}) before main weather by location button.")
+            await state.clear()
+        
+        await _get_and_show_weather(bot, message, state, session, coords={"lat": lat, "lon": lon})
+    else:
+        logger.warning(f"User {message.from_user.id}: process_main_geolocation_button called without message.location.")
+        # Ответ пользователю будет дан из common.py, если reply_to_message не сработает
+# ... (остальные обработчики этого модуля: _get_and_show_weather, weather_entry_point, handle_city_input, и колбэки)
+# В weather_entry_point, если нет preferred_city, он уже устанавливает WeatherStates.waiting_for_city.
+
+# ... (код _get_and_show_weather, weather_entry_point, handle_city_input, и колбэков без изменений относительно предыдущей версии)
+# ... (они уже были предоставлены и должны быть здесь)
+# Убедитесь, что `_get_and_show_weather` корректно сбрасывает или изменяет состояние после показа погоды,
+# особенно если оно было `WeatherStates.waiting_for_city`.
+# Например, в `_get_and_show_weather`, если погода успешно показана (не ошибка API):
+#   ...
+#   else: # Если не ask_to_save (т.е. город предпочтительный или это геолокация)
+#       reply_markup = get_weather_actions_keyboard()
+#       current_fsm_state_name = await state.get_state()
+#       if current_fsm_state_name == WeatherStates.waiting_for_city.state:
+#           logger.info(f"User {user_id}: Weather shown successfully. Clearing FSM state from waiting_for_city.")
+#           await state.set_state(None) # Сбрасываем состояние ожидания
+#   ...
+# Это уже было в одной из предыдущих версий _get_and_show_weather.
+
+# Код _get_and_show_weather (убедитесь, что эта часть есть и актуальна):
 async def _get_and_show_weather(
     bot: Bot, target: Union[Message, CallbackQuery], state: FSMContext, session: AsyncSession,
     city_input: Optional[str] = None, coords: Optional[Dict[str, float]] = None
@@ -146,9 +189,13 @@ async def _get_and_show_weather(
         else:
             reply_markup = get_weather_actions_keyboard()
             current_fsm_state_name = await state.get_state()
+            # Если мы были в состоянии ожидания города (т.е. пользователь ввел город) и не спрашиваем о сохранении
+            # (значит, город уже предпочтительный или это геолокация), то сбрасываем состояние ожидания.
             if current_fsm_state_name == WeatherStates.waiting_for_city.state:
-                logger.info(f"User {user_id}: City '{city_input}' is already preferred or not saveable. Clearing FSM state from waiting_for_city.")
+                logger.info(f"User {user_id}: Weather shown (city '{city_input}' is preferred or from geo). Clearing FSM state from waiting_for_city.")
                 await state.set_state(None)
+            # Если это был прямой вызов по геолокации (coords is not None), состояние и так должно было быть очищено перед вызовом _get_and_show_weather
+            # или установлено в None, если это первая команда /start
         try:
             await final_target_message.edit_text(text_to_send, reply_markup=reply_markup)
         except Exception as e:
@@ -156,6 +203,7 @@ async def _get_and_show_weather(
             try: await message_to_edit_or_answer.answer(text_to_send, reply_markup=reply_markup)
             except Exception as e2: logger.error(f"Failed to send new final weather message either: {e2}")
     elif weather_data and (str(weather_data.get("cod")) == "404"):
+        # ... (код обработки 404 без изменений) ...
         city_error_name = city_input if city_input else "вказана локація"
         error_text = f"😔 На жаль, місто/локація '<b>{city_error_name}</b>' не знайдено."
         reply_markup = get_weather_enter_city_back_keyboard()
@@ -167,6 +215,7 @@ async def _get_and_show_weather(
         logger.warning(f"Location '{request_details}' not found for user {user_id} (404). Clearing FSM state.")
         await state.clear()
     else:
+        # ... (код обработки других ошибок без изменений) ...
         error_code = weather_data.get('cod', 'N/A') if weather_data else 'N/A'
         error_api_message = weather_data.get('message', 'Internal error') if weather_data else 'Internal error'
         error_text = f"😥 Вибачте, сталася помилка при отриманні погоди для {request_details} (Код: {error_code} - {error_api_message}). Спробуйте пізніше."
@@ -179,6 +228,8 @@ async def _get_and_show_weather(
         logger.error(f"Failed to get weather for {request_details} for user {user_id}. API Response: {weather_data}. Clearing FSM state.")
         await state.clear()
 
+# Остальные хендлеры (weather_entry_point, handle_city_input, колбэки) остаются как в предыдущей версии.
+# ...
 async def weather_entry_point(
     target: Union[Message, CallbackQuery], state: FSMContext, session: AsyncSession, bot: Bot
 ):
@@ -216,30 +267,7 @@ async def weather_entry_point(
         await state.set_state(WeatherStates.waiting_for_city)
         logger.info(f"User {user_id}: Set FSM state to WeatherStates.waiting_for_city.")
 
-# ИЗМЕНЕНИЕ: Убираем декоратор @router.message(F.location)
-# Эта функция теперь будет вызываться напрямую из common.py (location_router)
-async def handle_location(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
-    """Обрабатывает полученную геолокацию для основного сервиса погоды."""
-    if message.location:
-        lat = message.location.latitude
-        lon = message.location.longitude
-        user_id = message.from_user.id
-        logger.info(f"MAIN weather module: handle_location called for user {user_id}: lat={lat}, lon={lon}")
-        
-        current_fsm_state_name = await state.get_state()
-        # Очищаем состояние, только если оно относится к этому модулю или общее (None)
-        # чтобы не сбросить состояние другого модуля, если вдруг вызов был ошибочным.
-        if current_fsm_state_name is None or (isinstance(current_fsm_state_name, str) and current_fsm_state_name.startswith("WeatherStates")):
-            logger.info(f"User {user_id}: Clearing FSM state ({current_fsm_state_name}) before showing main weather by location.")
-            await state.clear()
-        else:
-            logger.warning(f"User {user_id}: handle_location (main weather) called while in FSM state '{current_fsm_state_name}'. Not clearing state automatically.")
-            # В этом случае, возможно, стоит просто проигнорировать или сообщить пользователю, что нужно завершить текущее действие.
-            # Но для простоты пока оставим так, _get_and_show_weather все равно обновит нужные данные.
-
-        await _get_and_show_weather(bot, message, state, session, coords={"lat": lat, "lon": lon})
-
-@router.message(WeatherStates.waiting_for_city)
+@router.message(WeatherStates.waiting_for_city, F.text) # Изменили F.text чтобы не конфликтовать с F.location выше
 async def handle_city_input(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
     user_city_input = message.text.strip() if message.text else ""
     logger.info(f"handle_city_input: User {message.from_user.id} entered city '{user_city_input}'. Current FSM state: {await state.get_state()}")
@@ -287,10 +315,9 @@ async def handle_action_refresh(callback: CallbackQuery, state: FSMContext, sess
         else:
             logger.warning(f"User {user_id}: No city in state and no preferred city in DB for main refresh. Asking to input city.")
             await callback.message.edit_text("😔 Не вдалося визначити місто для оновлення. Будь ласка, введіть місто:", reply_markup=get_weather_enter_city_back_keyboard())
-            await state.set_state(WeatherStates.waiting_for_city) # Переводим в состояние ожидания города для основного модуля
+            await state.set_state(WeatherStates.waiting_for_city)
             await callback.answer("Не вдалося оновити", show_alert=True)
 
-# ... (остальные обработчики этого модуля без изменений: handle_save_city_yes, handle_save_city_no, handle_forecast_request, handle_show_current_weather, handle_weather_back_to_main)
 @router.callback_query(WeatherStates.waiting_for_save_decision, F.data == CALLBACK_WEATHER_SAVE_CITY_YES)
 async def handle_save_city_yes(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
     user_id = callback.from_user.id
