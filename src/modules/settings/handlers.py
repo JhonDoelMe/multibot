@@ -47,14 +47,14 @@ async def _get_user_settings(session: AsyncSession, user_id: int) -> User:
 async def settings_entry_point(target: Union[Message, CallbackQuery], session: AsyncSession, bot: Bot):
     user_id = target.from_user.id
     db_user = await _get_user_settings(session, user_id)
-    
+
     text = "⚙️ **Налаштування**\n\nОберіть, що саме ви хочете налаштувати:"
     reply_markup = get_main_settings_keyboard(
         current_weather_service=db_user.preferred_weather_service,
         current_alert_service=db_user.preferred_alert_service
     )
 
-    # ИСПРАВЛЕНИЕ: Улучшенная обработка ошибок при отправке/редактировании сообщения
+    # ИСПРАВЛЕНИЕ: Исправлен синтаксис обработки ошибок при отправке/редактировании сообщения
     if isinstance(target, CallbackQuery):
         try: await target.answer() # Отвечаем на колбэк
         except Exception as e: logger.warning(f"Could not answer callback in settings_entry_point: {e}")
@@ -92,11 +92,11 @@ async def cq_back_to_settings_menu(callback: CallbackQuery, session: AsyncSessio
 async def cq_select_weather_service_menu(callback: CallbackQuery, session: AsyncSession, bot: Bot):
     user_id = callback.from_user.id
     db_user = await _get_user_settings(session, user_id)
-    
+
     text = "🌦️ **Вибір сервісу погоди**\n\nОберіть бажаний сервіс для отримання даних про погоду:"
     reply_markup = get_weather_service_selection_keyboard(db_user.preferred_weather_service)
-    
-    # ИСПРАВЛЕНИЕ: Улучшенная обработка ошибок при отправке/редактировании сообщения
+
+    # ИСПРАВЛЕНИЕ: Исправлен синтаксис обработки ошибок при отправке/редактировании сообщения
     try: await callback.answer()
     except Exception as e: logger.warning(f"Could not answer callback in cq_select_weather_service_menu: {e}")
     try: await callback.message.edit_text(text, reply_markup=reply_markup)
@@ -145,7 +145,7 @@ async def cq_set_weather_service(callback: CallbackQuery, session: AsyncSession,
         # Обновляем клавиатуру, чтобы показать новый выбор
         text = "🌦️ **Вибір сервісу погоди**\n\nОберіть бажаний сервіс для отримання даних про погоду:"
         reply_markup = get_weather_service_selection_keyboard(chosen_service)
-        # ИСПРАВЛЕНИЕ: Улучшенная обработка ошибок при редактировании сообщения
+        # ИСПРАВЛЕНИЕ: Исправлен синтаксис обработки ошибок при редактировании сообщения
         try: await callback.message.edit_text(text, reply_markup=reply_markup)
         except Exception as e:
             logger.error(f"Error editing message after setting weather service: {e}")
@@ -156,11 +156,11 @@ async def cq_set_weather_service(callback: CallbackQuery, session: AsyncSession,
 async def cq_select_alert_service_menu(callback: CallbackQuery, session: AsyncSession, bot: Bot):
     user_id = callback.from_user.id
     db_user = await _get_user_settings(session, user_id)
-    
+
     text = "🚨 **Вибір сервісу тривог**\n\nОберіть бажаний сервіс для отримання даних про повітряні тривоги:"
     reply_markup = get_alert_service_selection_keyboard(db_user.preferred_alert_service)
-    
-    # ИСПРАВЛЕНИЕ: Улучшенная обработка ошибок при отправке/редактировании сообщения
+
+    # ИСПРАВЛЕНИЕ: Исправлен синтаксис обработки ошибок при отправке/редактировании сообщения
     try: await callback.answer()
     except Exception as e: logger.warning(f"Could not answer callback in cq_select_alert_service_menu: {e}")
     try: await callback.message.edit_text(text, reply_markup=reply_markup)
@@ -208,7 +208,7 @@ async def cq_set_alert_service(callback: CallbackQuery, session: AsyncSession, b
 
         text = "🚨 **Вибір сервісу тривог**\n\nОберіть бажаний сервіс для отримання даних про повітряні тривоги:"
         reply_markup = get_alert_service_selection_keyboard(chosen_service)
-        # ИСПРАВЛЕНИЕ: Улучшенная обработка ошибок при редактировании сообщения
+        # ИСПРАВЛЕНИЕ: Исправлен синтаксис обработки ошибок при редактировании сообщения
         try: await callback.message.edit_text(text, reply_markup=reply_markup)
         except Exception as e:
             logger.error(f"Error editing message after setting alert service: {e}")

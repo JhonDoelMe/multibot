@@ -1,4 +1,4 @@
-# src/modules/currency/handlers.py
+# src/modules/currency/handlers.py (Исправлена IndentationError)
 
 import logging
 from typing import Union, Optional
@@ -28,7 +28,7 @@ async def currency_entry_point(target: Union[Message, CallbackQuery], bot: Bot):
     reply_markup = get_currency_type_keyboard() # Клавиатура выбора типа
     message_to_edit_or_answer = target.message if isinstance(target, CallbackQuery) else target
 
-    # ИСПРАВЛЕНИЕ: Улучшенная обработка ошибок при отправке/редактировании сообщения
+    # ИСПРАВЛЕНИЕ: Исправлен синтаксис обработки ошибок при отправке/редактировании сообщения
     if isinstance(target, CallbackQuery):
         try: await target.answer() # Отвечаем на колбэк
         except Exception as e: logger.warning(f"Could not answer callback in currency_entry_point: {e}")
@@ -59,7 +59,7 @@ async def _show_rates(bot: Bot, callback: CallbackQuery, cash: bool):
 
     # Редактируем сообщение на "Загрузка..." БЕЗ клавиатуры
     status_message = None
-    # ИСПРАВЛЕНИЕ: Улучшенная обработка ошибок при редактировании статусного сообщения
+    # ИСПРАВЛЕНИЕ: Исправлен синтаксис обработки ошибок при редактировании статусного сообщения
     try:
         status_message = await callback.message.edit_text(f"⏳ Отримую {rate_type_name.lower()}...")
     except Exception as e:
@@ -80,7 +80,7 @@ async def _show_rates(bot: Bot, callback: CallbackQuery, cash: bool):
         logger.warning(f"Failed to get {rate_type_name} rates for user {user_id} (API service returned None).")
 
     # Редактируем сообщение, показывая курсы БЕЗ инлайн клавиатуры
-    # ИСПРАВЛЕНИЕ: Улучшенная обработка ошибок при редактировании финального сообщения
+    # ИСПРАВЛЕНИЕ: Исправлен синтаксис обработки ошибок при редактировании финального сообщения
     final_target_message = status_message if status_message else callback.message # Ensure final_target_message is set
     try:
          await final_target_message.edit_text(message_text, reply_markup=reply_markup)

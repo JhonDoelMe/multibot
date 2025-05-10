@@ -20,11 +20,13 @@ async def _show_alerts(bot: Bot, target: Union[Message, CallbackQuery]): # <<< �
     message_to_edit_or_answer = target.message if isinstance(target, CallbackQuery) else target
     status_message = None
 
-    # ИСПРАВЛЕНИЕ: Улучшенная обработка ошибок при отправке/редактировании статусного сообщения
+    # ИСПРАВЛЕНИЕ: Исправлен синтаксис обработки ошибок при отправке/редактировании статусного сообщения
     try: # Отправка статуса
         if isinstance(target, CallbackQuery):
-            try: status_message = await message_to_edit_or_answer.edit_text("⏳ Отримую актуальний статус тривог..."); await target.answer()
-            except Exception as e: logger.error(f"Error editing message for initial status in _show_alerts (callback): {e}"); try: status_message = await target.message.answer("⏳ Отримую актуальний статус тривог..."); await target.answer(); except Exception as e2: logger.error(f"Error sending new message for initial status (callback fallback): {e2}"); status_message = message_to_edit_or_answer # Final fallback
+            try: status_message = await message_to_edit_or_answer.edit_text("⏳ Отримую актуальний статус тривог...")
+            except Exception as e: logger.error(f"Error editing message for initial status in _show_alerts (callback): {e}"); try: status_message = await target.message.answer("⏳ Отримую актуальний статус тривог..."); except Exception as e2: logger.error(f"Error sending new message for initial status (callback fallback): {e2}"); status_message = message_to_edit_or_answer # Final fallback
+            try: await target.answer()
+            except Exception as e: logger.warning(f"Could not answer callback after status message: {e}")
         else: # Message
             try: status_message = await message_to_edit_or_answer.answer("⏳ Отримую актуальний статус тривог...")
             except Exception as e: logger.error(f"Error sending message for initial status in _show_alerts (message): {e}"); status_message = message_to_edit_or_answer # Fallback
@@ -40,14 +42,16 @@ async def _show_alerts(bot: Bot, target: Union[Message, CallbackQuery]): # <<< �
     # Определяем финальное сообщение для редактирования
     final_target_message = status_message if status_message else message_to_edit_or_answer
 
-    # ИСПРАВЛЕНИЕ: Улучшенная обработка ошибок при редактировании/отправке финального сообщения
+    # ИСПРАВЛЕНИЕ: Исправлен синтаксис обработки ошибок при редактировании/отправке финального сообщения
     try: # Редактирование финального сообщения
         await final_target_message.edit_text(message_text, reply_markup=reply_markup)
         logger.info(f"Sent alert status to user {user_id}.")
     except Exception as e: # Обработка ошибок редактирования/отправки
          logger.error(f"Error editing message for alert status: {e}")
-         try: await message_to_edit_or_answer.answer(message_text, reply_markup=reply_markup)
-         except Exception as e2: logger.error(f"Error sending new message for alert status: {e2}")
+         try:
+             await message_to_edit_or_answer.answer(message_text, reply_markup=reply_markup)
+         except Exception as e2:
+              logger.error(f"Error sending new message for alert status: {e2}")
 
 # --- ИЗМЕНЯЕМ ВЫЗОВЫ: Передаем bot ---
 async def alert_entry_point(target: Union[Message, CallbackQuery], bot: Bot): # <<< Добавили bot

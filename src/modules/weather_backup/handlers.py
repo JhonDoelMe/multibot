@@ -25,7 +25,7 @@ from .keyboard import (
 )
 from src.handlers.utils import show_main_menu_message
 from src.modules.weather.keyboard import get_weather_enter_city_back_keyboard
-from src.modules.weather.keyboard import WEATHER_PREFIX as MAIN_WEATHER_PREFIX 
+from src.modules.weather.keyboard import WEATHER_PREFIX as MAIN_WEATHER_PREFIX
 
 
 logger = logging.getLogger(__name__)
@@ -52,16 +52,22 @@ async def _fetch_and_show_backup_weather(
     if show_forecast:
         action_text = "⏳ Отримую резервний прогноз..."
 
-    # ИСПРАВЛЕНИЕ: Улучшенная обработка ошибок при отправке/редактировании статусного сообщения
+    # ИСПРАВЛЕНИЕ: Исправлен синтаксис обработки ошибок при отправке/редактировании статусного сообщения
     try:
         if isinstance(target, CallbackQuery):
             try:
                 status_message = await message_to_edit_or_answer.edit_text(action_text)
-                await target.answer()
+                try: await target.answer()
+                except Exception as e: logger.warning(f"Could not answer callback after status edit: {e}")
             except Exception as e:
                  logger.error(f"Error editing message for initial status in _fetch_and_show_backup_weather (callback): {e}")
-                 try: status_message = await target.message.answer(action_text); await target.answer()
-                 except Exception as e2: logger.error(f"Error sending new message for initial status (callback fallback): {e2}"); status_message = message_to_edit_or_answer # Final fallback
+                 try:
+                     status_message = await target.message.answer(action_text)
+                     try: await target.answer()
+                     except Exception as e2: logger.warning(f"Could not answer callback after status send (fallback): {e2}")
+                 except Exception as e2:
+                     logger.error(f"Error sending new message for initial status (callback fallback): {e2}")
+                     status_message = message_to_edit_or_answer # Final fallback
         else: # Message
             try: status_message = await target.answer(action_text)
             except Exception as e: logger.error(f"Error sending message for initial status in _fetch_and_show_backup_weather (message): {e}"); status_message = message_to_edit_or_answer # Fallback
@@ -72,11 +78,11 @@ async def _fetch_and_show_backup_weather(
 
 
     final_target_message = status_message if status_message else message_to_edit_or_answer
-    
+
     api_response_data = None
     formatted_message_text = ""
     reply_markup = None
-    
+
     display_location_for_message = location_input
 
     if show_forecast:
@@ -97,8 +103,8 @@ async def _fetch_and_show_backup_weather(
         else:
             # ИСПРАВЛЕНИЕ: Используем set_state(None) при ошибке API
             await state.set_state(None)
-    
-    # ИСПРАВЛЕНИЕ: Улучшенная обработка ошибок при редактировании/отправке финального сообщения
+
+    # ИСПРАВЛЕНИЕ: Исправлен синтаксис обработки ошибок при редактировании/отправке финального сообщения
     try:
         await final_target_message.edit_text(formatted_message_text, reply_markup=reply_markup)
         logger.info(f"User {user_id}: Sent backup weather/forecast for location_input='{location_input}'.")
@@ -119,7 +125,7 @@ async def weather_backup_entry_point(
 ):
     user_id = target.from_user.id
     logger.info(f"User {user_id} initiated weather_backup_entry_point.")
-    
+
     current_fsm_state = await state.get_state()
     # Логіка очищення стану, якщо користувач не в стані цього модуля
     # Залишаємо state.clear() при вході ззовні для повного скидання стану
@@ -138,8 +144,8 @@ async def weather_backup_entry_point(
     if db_user and db_user.preferred_city:
         location_to_use = db_user.preferred_city
         logger.info(f"User {user_id}: Using preferred city '{location_to_use}' for backup weather.")
-    
-    # ИСПРАВЛЕНИЕ: Обработка случая, если target - CallbackQuery и answer() вызывает ошибку
+
+    # ИСПРАВЛЕНИЕ: Исправлен синтаксис обработки ошибок при answer()
     if isinstance(target, CallbackQuery):
         try: await target.answer()
         except Exception as e: logger.warning(f"Could not answer callback in weather_backup_entry_point: {e}")
@@ -152,7 +158,7 @@ async def weather_backup_entry_point(
     else:
         logger.info(f"User {user_id}: No preferred city for backup weather. Asking for location input or geolocation.")
         text = "Будь ласка, введіть назву міста (або 'lat,lon') для резервного сервісу погоди, або надішліть геолокацію."
-        # ИСПРАВЛЕНИЕ: Улучшенная обработка ошибок при отправке сообщения
+        # ИСПРАВЛЕНИЕ: Исправлен синтаксис обработки ошибок при отправке сообщения
         try:
             if isinstance(target, Message):
                  await target_message.answer(text, reply_markup=get_weather_enter_city_back_keyboard())
@@ -169,9 +175,11 @@ async def handle_backup_location_text_input(message: Message, state: FSMContext,
     location_input = message.text.strip() if message.text else ""
     logger.info(f"User {user_id} entered text location '{location_input}' for backup weather.")
     if not location_input:
-        # ИСПРАВЛЕНИЕ: Улучшенная обработка ошибок при отправке сообщения
-        try: await message.answer("Назва міста або координати не можуть бути порожніми. Спробуйте ще раз.")
-        except Exception as e: logger.error(f"Error sending empty backup location message: {e}")
+        # ИСПРАВЛЕНИЕ: Исправлен синтаксис обработки ошибок при отправке сообщения
+        try:
+            await message.answer("Назва міста або координати не можуть бути порожніми. Спробуйте ще раз.")
+        except Exception as e:
+            logger.error(f"Error sending empty backup location message: {e}")
         return
     is_coords = ',' in location_input and len(location_input.split(',')) == 2
     try:
@@ -229,14 +237,17 @@ async def handle_refresh_current_backup(callback: CallbackQuery, state: FSMConte
         await _fetch_and_show_backup_weather(bot, callback, state, session, location_input=location, show_forecast=False, is_coords_request=is_coords)
     else:
         logger.warning(f"User {user_id}: No location found in state for refreshing current backup weather.")
-        # ИСПРАВЛЕНИЕ: Улучшенная обработка ошибок при редактировании/отправке сообщения
+        # ИСПРАВЛЕНИЕ: Исправлен синтаксис обработки ошибок при редактировании/отправке сообщения
         error_text = "Не вдалося знайти дані для оновлення."
         reply_markup = get_weather_enter_city_back_keyboard()
-        try: await callback.message.edit_text("Будь ласка, введіть місто (або надішліть геолокацію) для резервної погоди:", reply_markup=reply_markup)
+        try:
+            await callback.message.edit_text("Будь ласка, введіть місто (або надішліть геолокацію) для резервної погоди:", reply_markup=reply_markup)
         except Exception as e:
              logger.error(f"Failed to edit message after backup refresh failure: {e}")
-             try: await callback.message.answer("Будь ласка, введіть місто (або надішліть геолокацію) для резервної погоди:", reply_markup=reply_markup)
-             except Exception as e2: logger.error(f"Failed to send message after backup refresh failure either: {e2}")
+             try:
+                 await callback.message.answer("Будь ласка, введіть місто (або надішліть геолокацію) для резервної погоди:", reply_markup=reply_markup)
+             except Exception as e2:
+                 logger.error(f"Failed to send message after backup refresh failure either: {e2}")
 
         await state.set_state(WeatherBackupStates.waiting_for_location)
         # callback.answer() уже сделан выше с show_alert=True
@@ -256,14 +267,17 @@ async def handle_show_forecast_backup(callback: CallbackQuery, state: FSMContext
         await _fetch_and_show_backup_weather(bot, callback, state, session, location_input=location, show_forecast=True, is_coords_request=is_coords)
     else:
         logger.warning(f"User {user_id}: No location found in state for backup forecast.")
-        # ИСПРАВЛЕНИЕ: Улучшенная обработка ошибок при редактировании/отправке сообщения
+        # ИСПРАВЛЕНИЕ: Исправлен синтаксис обработки ошибок при редактировании/отправке сообщения
         error_text = "Не вдалося знайти дані для прогнозу."
         reply_markup = get_weather_enter_city_back_keyboard()
-        try: await callback.message.edit_text("Будь ласка, введіть місто (або надішліть геолокацію) для резервного прогнозу:", reply_markup=reply_markup)
+        try:
+            await callback.message.edit_text("Будь ласка, введіть місто (або надішліть геолокацію) для резервного прогнозу:", reply_markup=reply_markup)
         except Exception as e:
             logger.error(f"Failed to edit message after backup forecast failure: {e}")
-            try: await callback.message.answer("Будь ласка, введіть місто (або надішліть геолокацію) для резервного прогнозу:", reply_markup=reply_markup)
-            except Exception as e2: logger.error(f"Failed to send message after backup forecast failure either: {e2}")
+            try:
+                await callback.message.answer("Будь ласка, введіть місто (або надішліть геолокацію) для резервного прогнозу:", reply_markup=reply_markup)
+            except Exception as e2:
+                logger.error(f"Failed to send message after backup forecast failure either: {e2}")
 
         await state.set_state(WeatherBackupStates.waiting_for_location)
         # callback.answer() уже сделан выше с show_alert=True
@@ -284,14 +298,17 @@ async def handle_refresh_forecast_backup(callback: CallbackQuery, state: FSMCont
         await _fetch_and_show_backup_weather(bot, callback, state, session, location_input=location, show_forecast=True, is_coords_request=is_coords)
     else:
         logger.warning(f"User {user_id}: No location found in state for refreshing backup forecast.")
-        # ИСПРАВЛЕНИЕ: Улучшенная обработка ошибок при редактировании/отправке сообщения
+        # ИСПРАВЛЕНИЕ: Исправлен синтаксис обработки ошибок при редактировании/отправке сообщения
         error_text = "Не вдалося знайти дані для оновлення прогнозу."
         reply_markup = get_weather_enter_city_back_keyboard()
-        try: await callback.message.edit_text("Будь ласка, введіть місто (або надішліть геолокацію) для резервного прогнозу:", reply_markup=reply_markup)
+        try:
+            await callback.message.edit_text("Будь ласка, введіть місто (або надішліть геолокацію) для резервного прогнозу:", reply_markup=reply_markup)
         except Exception as e:
              logger.error(f"Failed to edit message after backup forecast refresh failure: {e}")
-             try: await callback.message.answer("Будь ласка, введіть місто (або надішліть геолокацію) для резервного прогнозу:", reply_markup=reply_markup)
-             except Exception as e2: logger.error(f"Failed to send message after backup forecast refresh failure either: {e2}")
+             try:
+                 await callback.message.answer("Будь ласка, введіть місто (або надішліть геолокацію) для резервного прогнозу:", reply_markup=reply_markup)
+             except Exception as e2:
+                 logger.error(f"Failed to send message after backup forecast refresh failure either: {e2}")
 
         await state.set_state(WeatherBackupStates.waiting_for_location)
         # callback.answer() уже сделан выше с show_alert=True
@@ -313,14 +330,17 @@ async def handle_show_current_from_forecast_backup(callback: CallbackQuery, stat
         await _fetch_and_show_backup_weather(bot, callback, state, session, location_input=location, show_forecast=False, is_coords_request=is_coords)
     else:
         logger.warning(f"User {user_id}: No location found in state for showing current backup weather from forecast.")
-        # ИСПРАВЛЕНИЕ: Улучшенная обработка ошибок при редактировании/отправке сообщения
+        # ИСПРАВЛЕНИЕ: Исправлен синтаксис обработки ошибок при редактировании/отправке сообщения
         error_text = "Не вдалося знайти дані."
         reply_markup = get_weather_enter_city_back_keyboard()
-        try: await callback.message.edit_text("Будь ласка, введіть місто (або надішліть геолокацію) для резервної погоди:", reply_markup=reply_markup)
+        try:
+            await callback.message.edit_text("Будь ласка, введіть місто (або надішліть геолокацію) для резервної погоди:", reply_markup=reply_markup)
         except Exception as e:
             logger.error(f"Failed to edit message after show current backup failure: {e}")
-            try: await callback.message.answer("Будь ласка, введіть місто (або надішліть геолокацію) для резервної погоди:", reply_markup=reply_markup)
-            except Exception as e2: logger.error(f"Failed to send message after show current backup failure either: {e2}")
+            try:
+                await callback.message.answer("Будь ласка, введіть місто (або надішліть геолокацію) для резервної погоги:", reply_markup=reply_markup)
+            except Exception as e2:
+                logger.error(f"Failed to send message after show current backup failure either: {e2}")
 
         await state.set_state(WeatherBackupStates.waiting_for_location)
         # callback.answer() уже сделан выше с show_alert=True
