@@ -83,8 +83,6 @@ async def _fetch_and_show_backup_weather(
     formatted_message_text = ""
     reply_markup = None
 
-    display_location_for_message = location_input
-
     if show_forecast:
         api_response_data = await get_forecast_weatherapi(bot, location=location_input, days=3)
         formatted_message_text = format_forecast_backup_message(api_response_data, requested_location=display_location_for_message)
@@ -193,7 +191,7 @@ async def handle_backup_location_text_input(message: Message, state: FSMContext,
     # Встановлюємо стан перед викликом _fetch_and_show_backup_weather
     # Якщо дані отримано успішно, _fetch_and_show_backup_weather встановить showing_current/forecast.
     # Якщо помилка, _fetch_and_show_backup_weather встановить None.
-    # Тому явне встановлення стану перед викликом тут не потрібне, _fetch_and_show_backup_weather робить це сама.
+    # Тому явне встановлення стану перед викликом тут не потрібне, _fetch_and_show_backup_weather робить это сама.
     await _fetch_and_show_backup_weather(bot, message, state, session, location_input=location_input, show_forecast=False, is_coords_request=is_coords)
 
 @router.message(WeatherBackupStates.waiting_for_location, F.location)
@@ -251,6 +249,7 @@ async def handle_refresh_current_backup(callback: CallbackQuery, state: FSMConte
 
         await state.set_state(WeatherBackupStates.waiting_for_location)
         # callback.answer() уже сделан выше с show_alert=True
+
 
 @router.callback_query(F.data == CALLBACK_WEATHER_BACKUP_SHOW_FORECAST, WeatherBackupStates.showing_current)
 async def handle_show_forecast_backup(callback: CallbackQuery, state: FSMContext, session: AsyncSession, bot: Bot):

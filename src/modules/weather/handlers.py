@@ -236,7 +236,7 @@ async def weather_entry_point(
     current_fsm_state_name = await state.get_state()
     # Логіка перевірки та очищення стану при вході в модуль погоди.
     # Залишаємо state.clear() при вході ззовні для повного скидання стану,
-    # якщо це не продовження поточного стану погоди.
+    # якщо це не продовження поточного стану погоды.
     if current_fsm_state_name is not None and current_fsm_state_name.startswith("WeatherStates"):
          logger.info(f"User {user_id}: Already in a WeatherStates ({current_fsm_state_name}) at weather_entry_point.")
          # Не очищаємо стан, якщо вже в стані погоди
@@ -395,7 +395,7 @@ async def handle_action_refresh(callback: CallbackQuery, state: FSMContext, sess
         await state.set_state(WeatherStates.waiting_for_save_decision) # Початковий стан після показу погоди
         await _get_and_show_weather(bot, callback, state, session, city_input=city_name_to_refresh)
     else:
-        logger.warning(f"User {user_id} requested REFRESH (main), but no city_name_to_refresh or coords found in FSM state. Attempting preferred city from DB.")
+        logger.warning(f"User {user_id}: No city_name_to_refresh or coords found in FSM state. Attempting preferred city from DB.")
         db_user = await session.get(User, user_id)
         preferred_city_from_db = db_user.preferred_city if db_user else None
         if preferred_city_from_db:

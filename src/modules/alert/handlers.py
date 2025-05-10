@@ -2,7 +2,7 @@
 
 import logging
 from typing import Union
-from aiogram import Bot, Router, F # <<< Добавили Bot
+from aiogram import Bot, Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup
 from sqlalchemy.ext.asyncio import AsyncSession # Пока не используется
 
