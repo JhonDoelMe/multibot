@@ -2,22 +2,19 @@
 
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 
-# Тексты кнопок
-BTN_WEATHER = "🌦️ Погода (осн.)"
+# Обновленные тексты кнопок
+BTN_WEATHER = "🌦️ Погода"  # Убрали "(осн.)"
 BTN_CURRENCY = "💰 Курс валют"
-BTN_ALERTS = "🚨 Повітряна тривога"
-BTN_ALERTS_BACKUP = "🚨 Резерв (Тривоги)"
-BTN_WEATHER_BACKUP = "🌦️ Погода (резерв)"
-BTN_LOCATION_MAIN = "📍 Погода по геолокації (осн.)" # Переименована для ясности
-BTN_LOCATION_BACKUP = "📍 Погода по геолокації (резерв)" # <<< НОВАЯ КНОПКА
+BTN_ALERTS = "🚨 Повітряна тривога" # Убрали "(осн.)"
+BTN_LOCATION = "📍 Погода по геолокації" # Одна кнопка для геолокации
+BTN_SETTINGS = "⚙️ Налаштування" # <<< НОВАЯ КНОПКА
 
 def get_main_reply_keyboard() -> ReplyKeyboardMarkup:
-    """ Создает клавиатуру с основными командами + кнопки геолокации. """
+    """ Создает клавиатуру с основными командами + кнопка геолокации + настройки. """
     keyboard = [
-        [KeyboardButton(text=BTN_WEATHER), KeyboardButton(text=BTN_WEATHER_BACKUP)],
-        [KeyboardButton(text=BTN_ALERTS), KeyboardButton(text=BTN_ALERTS_BACKUP)],
-        [KeyboardButton(text=BTN_CURRENCY)],
-        [KeyboardButton(text=BTN_LOCATION_MAIN, request_location=True), KeyboardButton(text=BTN_LOCATION_BACKUP, request_location=True)] # Две кнопки геолокации
+        [KeyboardButton(text=BTN_WEATHER), KeyboardButton(text=BTN_ALERTS)],
+        [KeyboardButton(text=BTN_CURRENCY), KeyboardButton(text=BTN_SETTINGS)],
+        [KeyboardButton(text=BTN_LOCATION, request_location=True)]
     ]
     markup = ReplyKeyboardMarkup(
         keyboard=keyboard,
