@@ -5,6 +5,7 @@ import logging
 import logging.handlers # Для RotatingFileHandler
 import sys
 import os # Для переменных окружения, если понадобятся здесь
+from datetime import datetime # <<< ИСПРАВЛЕНИЕ: Добавлен импорт datetime
 
 # --- Настройка логирования (должна быть одной из первых операций) ---
 LOG_FILENAME = os.getenv("LOG_FILENAME", "bot.log") # Имя файла логов из переменной или по умолчанию
@@ -175,12 +176,12 @@ if __name__ == "__main__":
         logger.info("Bot stopped by user (KeyboardInterrupt) or system exit.")
         # Sentry может не успеть отправить событие, если это KeyboardInterrupt
         # Можно добавить явный flush для Sentry здесь, если это критично
-        if app_config.SENTRY_DSN and sentry_sdk.Hub.current.client:
+        if app_config.SENTRY_DSN and 'sentry_sdk' in sys.modules and sentry_sdk.Hub.current.client:
             sentry_sdk.flush(timeout=2) # Даем Sentry 2 секунды на отправку
     except Exception as e:
         # Это исключение будет перехвачено Sentry, если он инициализирован
         logger.critical(f"Unhandled exception at the top level of asyncio.run: {e}", exc_info=True)
-        if app_config.SENTRY_DSN and sentry_sdk.Hub.current.client:
+        if app_config.SENTRY_DSN and 'sentry_sdk' in sys.modules and sentry_sdk.Hub.current.client:
             sentry_sdk.capture_exception(e)
             sentry_sdk.flush(timeout=5)
     finally:
@@ -188,4 +189,5 @@ if __name__ == "__main__":
         # Закрытие логгеров (особенно файловых)
         logging.shutdown()
         # Здесь не нужно выводить в лог после logging.shutdown()
+        # Используем datetime, который мы импортировали
         print(f"{datetime.now()} - Application shutdown complete from __main__.py.", file=sys.stderr)
