@@ -315,7 +315,7 @@ async def handle_show_current_weather(callback: CallbackQuery, state: FSMContext
         await state.clear()
         await show_main_menu_message(callback)
 
-@router.callback_query(F.data == CALLBACK_WEATHER_BACK_TO_main)
+@router.callback_query(F.data == CALLBACK_WEATHER_BACK_TO_MAIN)
 async def handle_weather_back_to_main(callback: CallbackQuery, state: FSMContext):
     from src.handlers.utils import show_main_menu_message
     logger.info(f"User {callback.from_user.id} requested back to main menu from weather input.")
