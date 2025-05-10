@@ -37,22 +37,26 @@ class DbSessionMiddleware(BaseMiddleware):
             data['session'] = session
 
             try:
+                logger.debug("DbSessionMiddleware: Before handler")
                 # Вызываем следующий middleware или сам хэндлер, передавая событие и обновленные данные
                 result = await handler(event, data)
+                logger.debug("DbSessionMiddleware: Handler executed successfully, attempting commit")
 
                 # Коммит, если не было исключений
                 await session.commit()
-                logger.debug("Database session committed.")
+                logger.debug("DbSessionMiddleware: Database session committed.")
 
             except Exception as e:
+                logger.warning(f"DbSessionMiddleware: Exception occurred: {e}, rolling back")
                 # Откат при любой ошибке
                 await session.rollback()
-                logger.warning(f"Database session rolled back due to error: {e}")
+                logger.warning("DbSessionMiddleware: Database session rolled back.")
                 raise e  # Пробрасываем исключение дальше, чтобы его обработали другие обработчики
 
             finally:
+                logger.debug("DbSessionMiddleware: Closing session")
                 # Закрываем сессию (теперь это делается автоматически при выходе из async with, но оставим для ясности)
                 await session.close()
-                logger.debug("Database session closed.")
+                logger.debug("DbSessionMiddleware: Database session closed.")
 
             return result
