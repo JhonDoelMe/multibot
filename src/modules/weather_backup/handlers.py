@@ -8,7 +8,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.db.models import User # Для получения сохраненного города
+from src.db.models import User
 from .service import (
     get_current_weather_weatherapi,
     format_weather_backup_message,
@@ -23,28 +23,31 @@ from .keyboard import (
     CALLBACK_WEATHER_BACKUP_REFRESH_FORECAST,
     CALLBACK_WEATHER_BACKUP_SHOW_CURRENT
 )
-# Для возврата в главное меню и клавиатуры ввода города из основного модуля (если решим использовать)
 from src.handlers.utils import show_main_menu_message
-from src.modules.weather.keyboard import get_weather_enter_city_back_keyboard # Пример
-from src.modules.weather.handlers import WeatherStates as MainWeatherStates # Если будем читать состояние из основного модуля
+# Используем клавиатуру с кнопкой "Назад в меню" из основного модуля погоды, если нужно запросить ввод
+from src.modules.weather.keyboard import get_weather_enter_city_back_keyboard
+# Импортируем префикс для колбэка "Назад", чтобы правильно его обработать, если понадобится
+from src.modules.weather.keyboard import WEATHER_PREFIX as MAIN_WEATHER_PREFIX 
+                                        # или создать свой CALLBACK_WEATHER_BACKUP_BACK_TO_MAIN
+
 
 logger = logging.getLogger(__name__)
 router = Router(name="weather-backup-module")
 
-# Состояния для этого модуля (если понадобятся для ввода города)
 class WeatherBackupStates(StatesGroup):
-    waiting_for_location = State() # Ожидание ввода города/координат для резервного сервиса
-    showing_current = State()      # Показываем текущую резервную погоду
-    showing_forecast = State()     # Показываем резервный прогноз
+    waiting_for_location = State() # Ожидание ввода города/координат или отправки геолокации
+    showing_current = State()
+    showing_forecast = State()
 
 
 async def _fetch_and_show_backup_weather(
     bot: Bot,
     target: Union[Message, CallbackQuery],
     state: FSMContext,
-    session: AsyncSession,
+    session: AsyncSession, # session может быть не нужен здесь, если не работаем с User DB
     location_input: str, # Город или "lat,lon"
-    show_forecast: bool = False
+    show_forecast: bool = False,
+    is_coords_request: bool = False # Флаг, что location_input - это координаты
 ):
     user_id = target.from_user.id
     message_to_edit_or_answer = target.message if isinstance(target, CallbackQuery) else target
@@ -68,33 +71,49 @@ async def _fetch_and_show_backup_weather(
     api_response_data = None
     formatted_message_text = ""
     reply_markup = None
-
-    if show_forecast:
-        api_response_data = await get_forecast_weatherapi(bot, location=location_input, days=3)
-        formatted_message_text = format_forecast_backup_message(api_response_data, requested_location=location_input)
-        if api_response_data and "error" not in api_response_data:
-            reply_markup = get_forecast_weather_backup_keyboard()
-            await state.set_state(WeatherBackupStates.showing_forecast)
-        # Если ошибка, клавиатура по умолчанию (или никакая) будет установлена ниже
-    else: # Показываем текущую погоду
-        api_response_data = await get_current_weather_weatherapi(bot, location=location_input)
-        formatted_message_text = format_weather_backup_message(api_response_data, requested_location=location_input)
-        if api_response_data and "error" not in api_response_data:
-            reply_markup = get_current_weather_backup_keyboard()
-            await state.set_state(WeatherBackupStates.showing_current)
-
-    # Если была ошибка API и reply_markup не установлен, можно поставить клавиатуру для повторного ввода или возврата
-    if api_response_data and "error" in api_response_data and not reply_markup:
-        # Можно добавить кнопку "Повторити" или "Ввести інше місто (резерв)"
-        # Пока просто сообщение без кнопок или можно get_weather_enter_city_back_keyboard() из основного модуля
+    
+    # Определяем, что передать в format_message как requested_location
+    # Если это координаты, то API само вернет имя, если сможет.
+    # Если это текст, то это и есть requested_location.
+    # format_message уже учитывает это.
+    display_location_for_message = location_input
+    if is_coords_request:
+        # Для координат в format_message передаем строку "ваші координати" или результат API
+        # location_input уже "lat,lon". format_weather_backup_message ожидает текст.
+        # Можно передать "ваші координати", а format_message сам разберется, если API вернет имя.
+        # Однако, API weatherapi.com вернет имя города в location.name даже для координат.
+        # Поэтому requested_location оставляем как location_input ("lat,lon"), 
+        # а format_weather_backup_message использует location.name из ответа.
         pass
 
 
+    if show_forecast:
+        api_response_data = await get_forecast_weatherapi(bot, location=location_input, days=3)
+        formatted_message_text = format_forecast_backup_message(api_response_data, requested_location=display_location_for_message)
+        if api_response_data and "error" not in api_response_data:
+            reply_markup = get_forecast_weather_backup_keyboard()
+            await state.set_state(WeatherBackupStates.showing_forecast)
+        else: # Ошибка или нет данных
+            await state.set_state(None) # Сбрасываем состояние, если была ошибка
+    else: 
+        api_response_data = await get_current_weather_weatherapi(bot, location=location_input)
+        formatted_message_text = format_weather_backup_message(api_response_data, requested_location=display_location_for_message)
+        if api_response_data and "error" not in api_response_data:
+            reply_markup = get_current_weather_backup_keyboard()
+            await state.set_state(WeatherBackupStates.showing_current)
+        else: # Ошибка или нет данных
+            await state.set_state(None) # Сбрасываем состояние, если была ошибка
+    
     try:
         await final_target_message.edit_text(formatted_message_text, reply_markup=reply_markup)
-        logger.info(f"User {user_id}: Sent backup weather/forecast for location '{location_input}'.")
-        # Сохраняем использованный location_input в состояние для кнопки "Обновить"
-        await state.update_data(current_backup_location=location_input)
+        logger.info(f"User {user_id}: Sent backup weather/forecast for location_input='{location_input}'.")
+        if api_response_data and "error" not in api_response_data:
+             # Сохраняем использованный location_input (город или "lat,lon") для кнопки "Обновить"
+            await state.update_data(current_backup_location=location_input, is_backup_coords=is_coords_request)
+            logger.debug(f"User {user_id}: Updated FSM for backup: current_backup_location='{location_input}', is_backup_coords={is_coords_request}")
+        else: # Если была ошибка, очищаем данные о последней локации
+             await state.update_data(current_backup_location=None, is_backup_coords=None)
+
     except Exception as e:
         logger.error(f"Error editing final message for backup weather: {e}")
         try:
@@ -103,59 +122,107 @@ async def _fetch_and_show_backup_weather(
             logger.error(f"Error sending new final message for backup weather: {e2}")
 
 
-# Точка входа для резервной погоды
+# Точка входа для резервной погоды (вызывается кнопкой "Резерв (Погода)")
 async def weather_backup_entry_point(
     target: Union[Message, CallbackQuery], state: FSMContext, session: AsyncSession, bot: Bot
 ):
     user_id = target.from_user.id
     logger.info(f"User {user_id} initiated weather_backup_entry_point.")
     
-    # Попробуем получить город из состояния основного модуля погоды или из БД
-    location_to_use: Optional[str] = None
-    
-    # 1. Попробовать взять из состояния основного модуля (если пользователь только что смотрел погоду там)
-    main_weather_fsm_data = await state.get_data() # Читаем данные из текущего контекста FSM
-    # Если мы хотим читать состояние ДРУГОГО FSM (например, WeatherStates), это сложнее и не рекомендуется напрямую.
-    # Вместо этого, `current_shown_city` из основного модуля должен был бы быть сохранен в `user_data` на более высоком уровне,
-    # или мы запрашиваем город заново для резервного сервиса.
+    current_fsm_state = await state.get_state()
+    if current_fsm_state is not None and current_fsm_state.startswith("WeatherBackupStates"):
+        logger.info(f"User {user_id}: Already in a WeatherBackupState ({current_fsm_state}), not clearing.")
+    elif current_fsm_state is not None: # Если в каком-то другом состоянии, очищаем
+        logger.info(f"User {user_id}: In another FSM state ({current_fsm_state}), clearing before backup weather.")
+        await state.clear()
+    else: # Состояние None, можно очистить данные
+        await state.clear()
 
-    # Для простоты, сначала используем сохраненный город пользователя.
+
+    location_to_use: Optional[str] = None
     db_user = await session.get(User, user_id)
     if db_user and db_user.preferred_city:
         location_to_use = db_user.preferred_city
         logger.info(f"User {user_id}: Using preferred city '{location_to_use}' for backup weather.")
     
-    # Если preferred_city нет, можно попытаться взять город, который пользователь смотрел в основном модуле.
-    # Это потребует, чтобы основной модуль сохранял `current_shown_city` в user_data FSM,
-    # а не только в своем состоянии. Либо мы можем передать его как параметр.
+    if isinstance(target, CallbackQuery): await target.answer()
+    target_message = target.message if isinstance(target, CallbackQuery) else target
 
-    # Пока что, если нет preferred_city, будем запрашивать.
     if location_to_use:
-        await state.set_state(WeatherBackupStates.showing_current) # Устанавливаем начальное состояние для этого модуля
-        await _fetch_and_show_backup_weather(bot, target, state, session, location_input=location_to_use, show_forecast=False)
+        # Устанавливаем состояние *до* вызова _fetch_and_show, чтобы колбэки работали
+        await state.set_state(WeatherBackupStates.showing_current)
+        await _fetch_and_show_backup_weather(bot, target, state, session, location_input=location_to_use, show_forecast=False, is_coords_request=False)
     else:
-        logger.info(f"User {user_id}: No preferred city for backup weather. Asking for location.")
-        if isinstance(target, CallbackQuery): await target.answer()
-        target_message = target.message if isinstance(target, CallbackQuery) else target
-        await target_message.answer( # Отправляем новое сообщение с запросом
-            "Будь ласка, введіть назву міста (або 'lat,lon') для резервного сервісу погоди:",
-            # reply_markup=get_weather_enter_city_back_keyboard() # Можно использовать клавиатуру из основного модуля
-        )
-        await state.set_state(WeatherBackupStates.waiting_for_location)
+        logger.info(f"User {user_id}: No preferred city for backup weather. Asking for location input or geolocation.")
+        text = "Будь ласка, введіть назву міста (або 'lat,lon') для резервного сервісу погоди, або надішліть геолокацію."
+        # Используем клавиатуру из основного модуля, чтобы была кнопка "Назад в меню"
+        # Важно, чтобы колбэк этой кнопки был обработан (например, в common.py или здесь)
+        # или создать свою клавиатуру для этого модуля
+        try:
+            if isinstance(target, Message):
+                 await target_message.answer(text, reply_markup=get_weather_enter_city_back_keyboard()) # Эта клавиатура имеет CALLBACK_WEATHER_BACK_TO_MAIN
+            elif isinstance(target, CallbackQuery): # Если это коллбэк, например, от кнопки "Резерв (Погода)"
+                 await target_message.edit_text(text, reply_markup=get_weather_enter_city_back_keyboard())
 
-@router.message(WeatherBackupStates.waiting_for_location)
-async def handle_backup_location_input(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
+        except Exception as e:
+            logger.error(f"Error sending message to ask for backup location: {e}")
+        await state.set_state(WeatherBackupStates.waiting_for_location)
+        logger.info(f"User {user_id}: Set FSM state to WeatherBackupStates.waiting_for_location.")
+
+# Обработчик для текстового ввода города/координат для резервного сервиса
+@router.message(WeatherBackupStates.waiting_for_location, F.text)
+async def handle_backup_location_text_input(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
     user_id = message.from_user.id
     location_input = message.text.strip() if message.text else ""
-    logger.info(f"User {user_id} entered location '{location_input}' for backup weather.")
+    logger.info(f"User {user_id} entered text location '{location_input}' for backup weather.")
 
     if not location_input:
         await message.answer("Назва міста або координати не можуть бути порожніми. Спробуйте ще раз.")
-        return # Остаемся в состоянии waiting_for_location
+        return
 
-    # Здесь можно добавить валидацию для location_input, если нужно
+    # Простая проверка, похоже ли это на "lat,lon"
+    is_coords = ',' in location_input and len(location_input.split(',')) == 2
+    try:
+        if is_coords:
+            lat, lon = map(float, location_input.split(',')) # Проверка, что это числа
+            logger.info(f"User {user_id}: Parsed as coords: lat={lat}, lon={lon}")
+    except ValueError:
+        is_coords = False # Не удалось распарсить как float, считаем, что это название города
+        logger.info(f"User {user_id}: Input '{location_input}' not parsed as coords, treating as city name.")
     
-    await _fetch_and_show_backup_weather(bot, message, state, session, location_input=location_input, show_forecast=False)
+    await _fetch_and_show_backup_weather(bot, message, state, session, location_input=location_input, show_forecast=False, is_coords_request=is_coords)
+
+# <<< НОВЫЙ ОБРАБОТЧИК для геолокации в состоянии waiting_for_location >>>
+@router.message(WeatherBackupStates.waiting_for_location, F.location)
+async def handle_backup_geolocation_input(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
+    user_id = message.from_user.id
+    lat = message.location.latitude
+    lon = message.location.longitude
+    logger.info(f"User {user_id} sent geolocation for backup weather: lat={lat}, lon={lon}")
+    
+    location_input_str = f"{lat},{lon}" # Формат "lat,lon" для weatherapi.com
+    
+    await _fetch_and_show_backup_weather(bot, message, state, session, location_input=location_input_str, show_forecast=False, is_coords_request=True)
+
+# Обработчик для кнопки "Резерв (Геолокація)" из главной клавиатуры
+# Этот обработчик будет в common.py, но здесь продумаем логику вызова
+async def weather_backup_geolocation_entry_point(
+    message: Message, state: FSMContext, session: AsyncSession, bot: Bot
+):
+    user_id = message.from_user.id
+    lat = message.location.latitude
+    lon = message.location.longitude
+    logger.info(f"User {user_id} initiated backup weather by geolocation directly: lat={lat}, lon={lon}")
+    
+    current_fsm_state = await state.get_state()
+    if current_fsm_state is not None: # Очищаем любое предыдущее состояние
+        logger.info(f"User {user_id}: Clearing FSM state ({current_fsm_state}) before backup weather by geolocation.")
+        await state.clear()
+        
+    location_input_str = f"{lat},{lon}"
+    # Устанавливаем состояние *до* вызова _fetch_and_show, чтобы колбэки работали
+    await state.set_state(WeatherBackupStates.showing_current)
+    await _fetch_and_show_backup_weather(bot, message, state, session, location_input=location_input_str, show_forecast=False, is_coords_request=True)
 
 
 @router.callback_query(F.data == CALLBACK_WEATHER_BACKUP_REFRESH_CURRENT, WeatherBackupStates.showing_current)
@@ -163,14 +230,16 @@ async def handle_refresh_current_backup(callback: CallbackQuery, state: FSMConte
     user_id = callback.from_user.id
     user_fsm_data = await state.get_data()
     location = user_fsm_data.get("current_backup_location")
-    logger.info(f"User {user_id} refreshing current backup weather for location: '{location}'.")
+    is_coords = user_fsm_data.get("is_backup_coords", False)
+    logger.info(f"User {user_id} refreshing current backup weather for location: '{location}', is_coords={is_coords}.")
     if location:
-        await _fetch_and_show_backup_weather(bot, callback, state, session, location_input=location, show_forecast=False)
+        await _fetch_and_show_backup_weather(bot, callback, state, session, location_input=location, show_forecast=False, is_coords_request=is_coords)
     else:
+        # ... (обработка ошибки как раньше)
         logger.warning(f"User {user_id}: No location found in state for refreshing current backup weather.")
-        await callback.answer("Не вдалося знайти місто для оновлення.", show_alert=True)
-        await state.set_state(WeatherBackupStates.waiting_for_location) # Предложить ввести заново
-        await callback.message.edit_text("Будь ласка, введіть місто для резервної погоди:")
+        await callback.answer("Не вдалося знайти дані для оновлення.", show_alert=True)
+        await state.set_state(WeatherBackupStates.waiting_for_location) 
+        await callback.message.edit_text("Будь ласка, введіть місто (або надішліть геолокацію) для резервної погоди:", reply_markup=get_weather_enter_city_back_keyboard())
 
 
 @router.callback_query(F.data == CALLBACK_WEATHER_BACKUP_SHOW_FORECAST, WeatherBackupStates.showing_current)
@@ -178,14 +247,16 @@ async def handle_show_forecast_backup(callback: CallbackQuery, state: FSMContext
     user_id = callback.from_user.id
     user_fsm_data = await state.get_data()
     location = user_fsm_data.get("current_backup_location")
-    logger.info(f"User {user_id} requesting backup forecast for location: '{location}'.")
+    is_coords = user_fsm_data.get("is_backup_coords", False) # Важно для правильного display_location_for_message
+    logger.info(f"User {user_id} requesting backup forecast for location: '{location}', is_coords={is_coords}.")
     if location:
-        await _fetch_and_show_backup_weather(bot, callback, state, session, location_input=location, show_forecast=True)
+        await _fetch_and_show_backup_weather(bot, callback, state, session, location_input=location, show_forecast=True, is_coords_request=is_coords)
     else:
+        # ... (обработка ошибки)
         logger.warning(f"User {user_id}: No location found in state for backup forecast.")
-        await callback.answer("Не вдалося знайти місто для прогнозу.", show_alert=True)
+        await callback.answer("Не вдалося знайти дані для прогнозу.", show_alert=True)
         await state.set_state(WeatherBackupStates.waiting_for_location)
-        await callback.message.edit_text("Будь ласка, введіть місто для резервного прогнозу:")
+        await callback.message.edit_text("Будь ласка, введіть місто (або надішліть геолокацію) для резервного прогнозу:", reply_markup=get_weather_enter_city_back_keyboard())
 
 
 @router.callback_query(F.data == CALLBACK_WEATHER_BACKUP_REFRESH_FORECAST, WeatherBackupStates.showing_forecast)
@@ -193,14 +264,16 @@ async def handle_refresh_forecast_backup(callback: CallbackQuery, state: FSMCont
     user_id = callback.from_user.id
     user_fsm_data = await state.get_data()
     location = user_fsm_data.get("current_backup_location")
-    logger.info(f"User {user_id} refreshing backup forecast for location: '{location}'.")
+    is_coords = user_fsm_data.get("is_backup_coords", False)
+    logger.info(f"User {user_id} refreshing backup forecast for location: '{location}', is_coords={is_coords}.")
     if location:
-        await _fetch_and_show_backup_weather(bot, callback, state, session, location_input=location, show_forecast=True)
+        await _fetch_and_show_backup_weather(bot, callback, state, session, location_input=location, show_forecast=True, is_coords_request=is_coords)
     else:
+        # ... (обработка ошибки)
         logger.warning(f"User {user_id}: No location found in state for refreshing backup forecast.")
-        await callback.answer("Не вдалося знайти місто для оновлення прогнозу.", show_alert=True)
+        await callback.answer("Не вдалося знайти дані для оновлення прогнозу.", show_alert=True)
         await state.set_state(WeatherBackupStates.waiting_for_location)
-        await callback.message.edit_text("Будь ласка, введіть місто для резервного прогнозу:")
+        await callback.message.edit_text("Будь ласка, введіть місто (або надішліть геолокацію) для резервного прогнозу:", reply_markup=get_weather_enter_city_back_keyboard())
 
 
 @router.callback_query(F.data == CALLBACK_WEATHER_BACKUP_SHOW_CURRENT, WeatherBackupStates.showing_forecast)
@@ -208,18 +281,23 @@ async def handle_show_current_from_forecast_backup(callback: CallbackQuery, stat
     user_id = callback.from_user.id
     user_fsm_data = await state.get_data()
     location = user_fsm_data.get("current_backup_location")
-    logger.info(f"User {user_id} requesting to show current backup weather (from forecast view) for: '{location}'.")
+    is_coords = user_fsm_data.get("is_backup_coords", False)
+    logger.info(f"User {user_id} requesting to show current backup weather (from forecast view) for: '{location}', is_coords={is_coords}.")
     if location:
-        await _fetch_and_show_backup_weather(bot, callback, state, session, location_input=location, show_forecast=False)
+        await _fetch_and_show_backup_weather(bot, callback, state, session, location_input=location, show_forecast=False, is_coords_request=is_coords)
     else:
+        # ... (обработка ошибки)
         logger.warning(f"User {user_id}: No location found in state for showing current backup weather from forecast.")
-        await callback.answer("Не вдалося знайти місто.", show_alert=True)
+        await callback.answer("Не вдалося знайти дані.", show_alert=True)
         await state.set_state(WeatherBackupStates.waiting_for_location)
-        await callback.message.edit_text("Будь ласка, введіть місто для резервної погоди:")
+        await callback.message.edit_text("Будь ласка, введіть місто (або надішліть геолокацію) для резервної погоди:", reply_markup=get_weather_enter_city_back_keyboard())
 
-# Можно добавить обработчик для кнопки "Назад в меню" из этого модуля, если он будет иметь свою клавиатуру с такой кнопкой.
-# @router.callback_query(F.data == "weatherbk:back_main", WeatherBackupStates.any_state)
-# async def handle_weather_backup_back_to_main(callback: CallbackQuery, state: FSMContext):
-#     await state.clear()
-#     await show_main_menu_message(callback)
-#     await callback.answer()
+# Обработчик для кнопки "Назад в меню" с клавиатуры get_weather_enter_city_back_keyboard
+# Это коллбэк из основного модуля погоды, но его можно обрабатывать и здесь, если мы в состоянии WeatherBackupStates
+@router.callback_query(F.data == f"{MAIN_WEATHER_PREFIX}:back_main", WeatherBackupStates.waiting_for_location)
+async def handle_backup_weather_back_to_main_from_input(callback: CallbackQuery, state: FSMContext):
+    user_id = callback.from_user.id
+    logger.info(f"User {user_id} pressed 'Back to Main' from backup weather location input. Clearing WeatherBackupStates.")
+    await state.clear() # Очищаем состояние этого модуля
+    await show_main_menu_message(callback) # Показываем главное меню
+    await callback.answer()
