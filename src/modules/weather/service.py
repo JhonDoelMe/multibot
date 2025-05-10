@@ -28,25 +28,32 @@ ICON_CODE_TO_EMOJI = {
     "11d": "⛈️", "11n": "⛈️", "13d": "❄️", "13n": "❄️", "50d": "🌫️", "50n": "🌫️",
 }
 
+# Словарь для перевода дней недели на украинский
+DAYS_OF_WEEK_UK = {
+    "Monday": "Понеділок",
+    "Tuesday": "Вівторок",
+    "Wednesday": "Середа",
+    "Thursday": "Четвер",
+    "Friday": "П'ятниця",
+    "Saturday": "Субота",
+    "Sunday": "Неділя",
+}
+
 def _weather_cache_key_builder(function_prefix: str, city_name: Optional[str] = None, latitude: Optional[float] = None, longitude: Optional[float] = None) -> str:
     if city_name:
-        # Приводим к нижнему регистру и убираем лишние пробелы для консистентности ключа
         return f"weather:{function_prefix}:city:{city_name.strip().lower()}"
     elif latitude is not None and longitude is not None:
         return f"weather:{function_prefix}:coords:{latitude:.4f}:{longitude:.4f}"
     logger.warning(f"_weather_cache_key_builder called with no city_name or coords for prefix {function_prefix}")
-    return f"weather:{function_prefix}:unknown_params_{datetime.now().timestamp()}" # Делаем ключ уникальным, если нет параметров
+    return f"weather:{function_prefix}:unknown_params_{datetime.now().timestamp()}"
 
 
-# ИСПРАВЛЕНИЕ: key_builder теперь правильно извлекает позиционные аргументы
 @cached(ttl=config.CACHE_TTL_WEATHER,
         key_builder=lambda func_ref, bot_obj, city_name_arg, *pos_args, **named_args: _weather_cache_key_builder(
             "data", city_name=city_name_arg
         ),
         namespace="weather_service")
 async def get_weather_data(bot: Bot, city_name: str) -> Optional[Dict[str, Any]]:
-    """ Получает данные о погоде. """
-    # Убедимся, что city_name это строка и не пустая, прежде чем логировать или использовать
     safe_city_name = str(city_name).strip() if city_name else "UNKNOWN_CITY_INPUT"
     logger.info(f"Service get_weather_data: Called for city_name='{safe_city_name}'")
     if not config.WEATHER_API_KEY:
@@ -56,16 +63,9 @@ async def get_weather_data(bot: Bot, city_name: str) -> Optional[Dict[str, Any]]
         logger.warning(f"Service get_weather_data: Received empty or invalid city_name.")
         return {"cod": 400, "message": "City name cannot be empty"}
 
-
-    params = {
-        "q": safe_city_name, # Используем очищенное имя
-        "appid": config.WEATHER_API_KEY,
-        "units": "metric",
-        "lang": "uk",
-    }
+    params = { "q": safe_city_name, "appid": config.WEATHER_API_KEY, "units": "metric", "lang": "uk"}
     last_exception = None
     api_url = OWM_API_URL
-
     for attempt in range(MAX_RETRIES):
         try:
             logger.debug(f"Attempt {attempt + 1}/{MAX_RETRIES} to fetch weather for '{safe_city_name}' from API")
@@ -90,10 +90,7 @@ async def get_weather_data(bot: Bot, city_name: str) -> Optional[Dict[str, Any]]
                         logger.error(f"Attempt {attempt + 1}: OWM Client Error {response.status} for '{safe_city_name}'. Response: {response_data_text[:200]}")
                         return {"cod": response.status, "message": f"Client error {response.status}"}
                     elif response.status >= 500 or response.status == 429:
-                        last_exception = aiohttp.ClientResponseError(
-                            response.request_info, response.history,
-                            status=response.status, message=f"Server error {response.status} or Rate limit"
-                        )
+                        last_exception = aiohttp.ClientResponseError(response.request_info, response.history, status=response.status, message=f"Server error {response.status} or Rate limit")
                         logger.warning(f"Attempt {attempt + 1}: OWM Server/RateLimit Error {response.status} for '{safe_city_name}'. Retrying...")
                     else:
                         logger.error(f"Attempt {attempt + 1}: Unexpected status {response.status} from OWM Weather for '{safe_city_name}'.")
@@ -112,40 +109,26 @@ async def get_weather_data(bot: Bot, city_name: str) -> Optional[Dict[str, Any]]
             await asyncio.sleep(delay)
         else:
             logger.error(f"All {MAX_RETRIES} attempts failed for weather '{safe_city_name}'. Last error: {last_exception!r}")
-            # ... (возврат ошибок без изменений)
-            if isinstance(last_exception, aiohttp.ClientResponseError):
-                return {"cod": last_exception.status, "message": f"API error after retries: {last_exception.message}"}
-            elif isinstance(last_exception, (aiohttp.ClientConnectorError, asyncio.TimeoutError)):
-                return {"cod": 504, "message": "Network/Timeout error after retries"}
-            elif last_exception:
-                 return {"cod": 500, "message": f"Failed after retries: {str(last_exception)}"}
+            if isinstance(last_exception, aiohttp.ClientResponseError): return {"cod": last_exception.status, "message": f"API error after retries: {last_exception.message}"}
+            elif isinstance(last_exception, (aiohttp.ClientConnectorError, asyncio.TimeoutError)): return {"cod": 504, "message": "Network/Timeout error after retries"}
+            elif last_exception: return {"cod": 500, "message": f"Failed after retries: {str(last_exception)}"}
             return {"cod": 500, "message": "Failed to get weather data after multiple retries"}
     return None
 
-# ИСПРАВЛЕНИЕ: key_builder теперь правильно извлекает позиционные аргументы
 @cached(ttl=config.CACHE_TTL_WEATHER,
         key_builder=lambda func_ref, bot_obj, lat_arg, lon_arg, *pos_args, **named_args: _weather_cache_key_builder(
             "data_coords", latitude=lat_arg, longitude=lon_arg
         ),
         namespace="weather_service")
 async def get_weather_data_by_coords(bot: Bot, latitude: float, longitude: float) -> Optional[Dict[str, Any]]:
-    """ Получает данные о погоде по координатам. """
     logger.info(f"Service get_weather_data_by_coords: Called for lat={latitude}, lon={longitude}")
     if not config.WEATHER_API_KEY:
         logger.error("OpenWeatherMap API key (WEATHER_API_KEY) is not configured for coords.")
         return {"cod": 500, "message": "API key not configured"}
 
-    params = {
-        "lat": latitude,
-        "lon": longitude,
-        "appid": config.WEATHER_API_KEY,
-        "units": "metric",
-        "lang": "uk",
-    }
-    # ... (остальная часть функции без изменений в логике, только возможное логгирование как в get_weather_data)
+    params = {"lat": latitude, "lon": longitude, "appid": config.WEATHER_API_KEY, "units": "metric", "lang": "uk"}
     last_exception = None
     api_url = OWM_API_URL
-
     for attempt in range(MAX_RETRIES):
         try:
             logger.debug(f"Attempt {attempt + 1}/{MAX_RETRIES} to fetch weather for coords ({latitude:.4f}, {longitude:.4f}) from API")
@@ -192,14 +175,12 @@ async def get_weather_data_by_coords(bot: Bot, latitude: float, longitude: float
             return {"cod": 500, "message": "Failed to get weather data by coords after multiple retries"}
     return None
 
-# ИСПРАВЛЕНИЕ: key_builder теперь правильно извлекает позиционные аргументы
 @cached(ttl=config.CACHE_TTL_WEATHER,
         key_builder=lambda func_ref, bot_obj, city_name_arg, *pos_args, **named_args: _weather_cache_key_builder(
             "forecast", city_name=city_name_arg
         ),
         namespace="weather_service")
 async def get_5day_forecast(bot: Bot, city_name: str) -> Optional[Dict[str, Any]]:
-    """ Получает прогноз на 5 дней. """
     safe_city_name = str(city_name).strip() if city_name else "UNKNOWN_CITY_INPUT"
     logger.info(f"Service get_5day_forecast: Called for city_name='{safe_city_name}'")
     if not config.WEATHER_API_KEY:
@@ -209,17 +190,9 @@ async def get_5day_forecast(bot: Bot, city_name: str) -> Optional[Dict[str, Any]
         logger.warning(f"Service get_5day_forecast: Received empty or invalid city_name.")
         return {"cod": "400", "message": "City name cannot be empty"}
 
-
-    params = {
-        "q": safe_city_name,
-        "appid": config.WEATHER_API_KEY,
-        "units": "metric",
-        "lang": "uk",
-    }
-    # ... (остальная часть функции без изменений в логике, только возможное логгирование как в get_weather_data)
+    params = {"q": safe_city_name, "appid": config.WEATHER_API_KEY, "units": "metric", "lang": "uk"}
     last_exception = None
     api_url = OWM_FORECAST_URL
-
     for attempt in range(MAX_RETRIES):
         try:
             logger.debug(f"Attempt {attempt + 1}/{MAX_RETRIES} to fetch 5-day forecast for '{safe_city_name}' from API")
@@ -271,10 +244,12 @@ async def get_5day_forecast(bot: Bot, city_name: str) -> Optional[Dict[str, Any]
     return None
 
 
-# --- format_weather_message и format_forecast_message остаются без изменений относительно предыдущей версии ---
-# (они уже были достаточно детализированы в плане логирования и обработки ошибок)
-def format_weather_message(data: Dict[str, Any], city_display_name_for_user: str) -> str:
-    """ Форматирует сообщение о погоде. city_display_name_for_user - это имя, которое увидит пользователь. """
+def format_weather_message(data: Dict[str, Any], city_display_name_for_user: str, is_coords_request: bool = False) -> str:
+    """
+    Форматирует сообщение о погоде.
+    city_display_name_for_user - это имя, которое увидит пользователь.
+    is_coords_request - флаг, указывающий, был ли запрос по координатам.
+    """
     try:
         cod = data.get("cod")
         if str(cod) != "200":
@@ -288,6 +263,18 @@ def format_weather_message(data: Dict[str, Any], city_display_name_for_user: str
         wind = data.get("wind", {})
         clouds = data.get("clouds", {})
         sys_info = data.get("sys", {})
+        api_city_name = data.get("name") # Имя города от API
+
+        # ИСПРАВЛЕНИЕ: Заголовок для погоды по координатам
+        header_text: str
+        if is_coords_request:
+            if api_city_name: # Если API вернуло имя для координат
+                header_text = f"<b>Погода (м. {api_city_name}, за координатами)</b>"
+            else: # Если API не вернуло имя
+                header_text = "<b>Погода за вашими координатами</b>"
+        else: # Для обычного запроса по имени города
+            header_text = f"<b>Погода в: {city_display_name_for_user}</b>"
+
 
         temp = main.get("temp")
         feels_like = main.get("feels_like")
@@ -331,7 +318,7 @@ def format_weather_message(data: Dict[str, Any], city_display_name_for_user: str
                 logger.warning(f"Could not format weather dt timestamp {dt_unix}.")
 
         message_lines = [
-            f"<b>Погода в: {city_display_name_for_user}</b> {emoji}",
+            f"{header_text} {emoji}", # Используем новый header_text
             f"🌡️ Температура: <b>{temp}°C</b> (відчувається як {feels_like}°C)",
             f"🌬️ Вітер: {wind_speed} м/с",
             f"💧 Вологість: {humidity}%",
@@ -348,6 +335,7 @@ def format_weather_message(data: Dict[str, Any], city_display_name_for_user: str
         logger.exception(f"Error formatting weather message for '{city_display_name_for_user}': {e}. Data: {str(data)[:500]}", exc_info=True)
         return f"😥 Помилка обробки даних погоди для <b>{city_display_name_for_user}</b>."
 
+
 def format_forecast_message(data: Dict[str, Any], city_display_name_for_user: str) -> str:
     """ Форматирует сообщение с прогнозом погоды на 5 дней. """
     try:
@@ -359,6 +347,8 @@ def format_forecast_message(data: Dict[str, Any], city_display_name_for_user: st
 
         api_city_name_in_forecast = data.get("city", {}).get("name")
         header_city_name = city_display_name_for_user
+        # Если city_display_name_for_user содержит "координатами", не используем имя из API прогноза для заголовка,
+        # так как city_display_name_for_user уже отформатировано как "Прогноз за вашими координатами, м. Город"
         if "координатами" not in city_display_name_for_user.lower() and api_city_name_in_forecast:
             header_city_name = api_city_name_in_forecast.capitalize()
 
@@ -378,7 +368,12 @@ def format_forecast_message(data: Dict[str, Any], city_display_name_for_user: st
             try:
                 dt_obj_utc = datetime.strptime(dt_txt, '%Y-%m-%d %H:%M:%S')
                 dt_obj_kyiv = dt_obj_utc.replace(tzinfo=pytz.utc).astimezone(TZ_KYIV)
-                date_str = dt_obj_kyiv.strftime('%d.%m (%A)')
+                
+                # ИСПРАВЛЕНИЕ: Получаем английское название дня недели и переводим
+                day_name_en = dt_obj_kyiv.strftime('%A') # %A - полное название дня недели на локали системы (обычно англ.)
+                day_name_uk = DAYS_OF_WEEK_UK.get(day_name_en, day_name_en) # Перевод или оставляем как есть
+                
+                date_str = dt_obj_kyiv.strftime(f'%d.%m ({day_name_uk})') # Используем украинское название дня
                 
                 if date_str not in daily_forecasts or \
                    (daily_forecasts[date_str].get("hour_diff", 24) > abs(dt_obj_kyiv.hour - 12) and dt_obj_kyiv.hour > 6 and dt_obj_kyiv.hour < 18) or \
