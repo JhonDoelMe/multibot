@@ -293,4 +293,31 @@ async def handle_forecast_request(callback: CallbackQuery, state: FSMContext, se
         await status_message.edit_text(message_text, reply_markup=reply_markup)
         logger.info(f"Sent 5-day forecast...")
     else:
-        error_code = forecast_api_data.get('cod', 'N/A') if forecast_api_data else '
+        error_code = forecast_api_data.get('cod', 'N/A') if forecast_api_data else 'N/A'
+        error_api_message = forecast_api_data.get('message', '...') if forecast_api_data else '...'
+        error_text = f"😥 Не вдалося отримати прогноз... (Помилка: {error_code} - {error_api_message})."
+        await status_message.edit_text(error_text)
+        logger.error(f"Failed to get forecast... Code: {error_code}, Msg: {error_api_message}")
+        await state.clear()
+
+@router.callback_query(F.data == CALLBACK_WEATHER_SHOW_CURRENT)
+async def handle_show_current_weather(callback: CallbackQuery, state: FSMContext, session: AsyncSession, bot: Bot):
+    user_data = await state.get_data()
+    current_city = user_data.get("current_shown_city")
+    user_id = callback.from_user.id
+    if current_city:
+        logger.info(f"User {user_id} requested back to current weather: {current_city}")
+        await _get_and_show_weather(bot, callback, state, session, city_input=current_city)
+    else:
+        logger.warning(f"User {user_id} requested back to current weather, no city in state.")
+        await callback.answer("...", show_alert=True)
+        from src.handlers.utils import show_main_menu_message
+        await state.clear()
+        await show_main_menu_message(callback)
+
+@router.callback_query(F.data == CALLBACK_WEATHER_BACK_TO_main)
+async def handle_weather_back_to_main(callback: CallbackQuery, state: FSMContext):
+    from src.handlers.utils import show_main_menu_message
+    logger.info(f"User {callback.from_user.id} requested back to main menu from weather input.")
+    await state.clear()
+    await show_main_menu_message(callback)
