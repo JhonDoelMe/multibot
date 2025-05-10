@@ -10,7 +10,7 @@ from typing import Optional
 from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
 from aiogram.client.bot import DefaultBotProperties
-from aiogram.client.session.aiohttp import AiohttpSession # Убедимся, что это правильный импорт
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
@@ -23,11 +23,12 @@ from src.middlewares.db_session import DbSessionMiddleware
 from src.middlewares.rate_limit import ThrottlingMiddleware
 
 # Импортируем роутеры
+from src.handlers import common as common_handlers # Общий лучше импортировать первым
 from src.modules.weather import handlers as weather_handlers
 from src.modules.currency import handlers as currency_handlers
 from src.modules.alert import handlers as alert_handlers
 from src.modules.alert_backup import handlers as alert_backup_handlers
-from src.handlers import common as common_handlers
+from src.modules.weather_backup import handlers as weather_backup_handlers # <<< НОВЫЙ ИМПОРТ
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,6 @@ async def on_startup(bot: Bot, base_url: Optional[str] = None):
     if config.RUN_WITH_WEBHOOK:
         if not base_url:
             logger.error("Base URL for webhook is not provided on startup!")
-            # В реальном приложении здесь может быть более сложная логика получения URL
         webhook_url = f"{base_url}{config.WEBHOOK_PATH}"
         logger.info(f"Setting webhook to: {webhook_url}")
         try:
@@ -79,7 +79,6 @@ async def on_shutdown(bot: Bot):
 async def main() -> None:
     logger.info("Starting main() function of the bot.")
 
-    # --- DB Init ---
     logger.info("Attempting database initialization...")
     db_initialized, session_factory = await initialize_database()
     if not db_initialized and config.DATABASE_URL:
@@ -90,25 +89,18 @@ async def main() -> None:
     else:
         logger.info("Database initialization successful.")
 
-    # --- Aiogram Init ---
     logger.info("Initializing Aiogram components...")
     storage = MemoryStorage()
     default_props = DefaultBotProperties(parse_mode=ParseMode.HTML)
-
-    # ИСПРАВЛЕНИЕ ОШИБКИ TypeError:
-    # 1. AiohttpSession инициализируется без явного ClientTimeout объекта.
-    #    Это приведет к тому, что bot.session.timeout будет DEFAULT_TIMEOUT.
     session = AiohttpSession()
     logger.info("AiohttpSession initialized without explicit ClientTimeout object.")
 
     try:
-        # 2. Устанавливаем request_timeout (int) для объекта Bot.
-        #    Этот таймаут будет использоваться для обычных API-запросов (отправка сообщений и т.д.).
         bot = Bot(
             token=config.BOT_TOKEN,
             default=default_props,
             session=session,
-            request_timeout=config.API_SESSION_TOTAL_TIMEOUT # Целочисленный таймаут для запросов бота
+            request_timeout=config.API_SESSION_TOTAL_TIMEOUT
         )
         logger.info(f"Aiogram Bot initialized. Default request_timeout for bot methods: {config.API_SESSION_TOTAL_TIMEOUT}s.")
     except Exception as e:
@@ -119,7 +111,6 @@ async def main() -> None:
     dp = Dispatcher(storage=storage)
     logger.info("Aiogram Dispatcher initialized.")
 
-    # --- Register Middleware ---
     if db_initialized and session_factory:
         dp.update.outer_middleware(DbSessionMiddleware(session_pool=session_factory))
         logger.info("Database session middleware registered.")
@@ -129,16 +120,15 @@ async def main() -> None:
     dp.update.outer_middleware(ThrottlingMiddleware(default_rate=config.THROTTLING_RATE_DEFAULT))
     logger.info(f"Throttling middleware registered with rate: {config.THROTTLING_RATE_DEFAULT}s.")
 
-    # --- Register Routers ---
     logger.info("Registering routers...")
-    dp.include_router(common_handlers.router)
+    dp.include_router(common_handlers.router) # Общие команды и кнопки меню
     dp.include_router(weather_handlers.router)
+    dp.include_router(weather_backup_handlers.router) # <<< РЕГИСТРАЦИЯ НОВОГО РОУТЕРА
     dp.include_router(currency_handlers.router)
     dp.include_router(alert_handlers.router)
     dp.include_router(alert_backup_handlers.router)
     logger.info("All routers registered.")
 
-    # --- Start Logic ---
     try:
         if config.RUN_WITH_WEBHOOK:
             logger.warning("Starting bot in WEBHOOK mode...")
@@ -146,20 +136,13 @@ async def main() -> None:
             if not base_webhook_url:
                  logger.critical("WEBHOOK_BASE_URL is not set in config, cannot start in webhook mode.")
                  sys.exit("Critical: WEBHOOK_BASE_URL not configured.")
-
             await on_startup(bot, base_webhook_url)
-
             app = web.Application()
             app["bot"] = bot
-            webhook_requests_handler = SimpleRequestHandler(
-                dispatcher=dp,
-                bot=bot,
-                secret_token=config.WEBHOOK_SECRET
-            )
+            webhook_requests_handler = SimpleRequestHandler(dispatcher=dp, bot=bot, secret_token=config.WEBHOOK_SECRET)
             webhook_requests_handler.register(app, path=config.WEBHOOK_PATH)
             logger.info(f"Registered webhook handler at path: {config.WEBHOOK_PATH}")
             logger.info("aiohttp Application setup for webhook complete.")
-
             runner = web.AppRunner(app)
             await runner.setup()
             logger.info("aiohttp AppRunner setup complete.")
@@ -170,22 +153,18 @@ async def main() -> None:
             logger.info("Bot is up and running in webhook mode! Waiting for updates from Telegram...")
             await asyncio.Event().wait()
             logger.warning("Infinite wait loop for web server finished (UNEXPECTED!).")
-
         else:
             await on_startup(bot)
             logger.warning("Starting bot in POLLING mode...")
             logger.info("Starting polling...")
             max_polling_retries = 5
             retry_delay_polling = 5
-
             for attempt_polling in range(max_polling_retries):
                 try:
-                    # 3. Явно передаем request_timeout (int) для поллинга.
-                    #    Это значение будет использоваться для параметра timeout в bot.get_updates().
                     await dp.start_polling(
                         bot,
                         allowed_updates=dp.resolve_used_update_types(),
-                        request_timeout=config.API_SESSION_TOTAL_TIMEOUT # Явный таймаут для поллинга
+                        request_timeout=config.API_SESSION_TOTAL_TIMEOUT
                     )
                     logger.info("Polling stopped gracefully.")
                     break
