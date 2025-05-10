@@ -57,7 +57,7 @@ async def _get_and_show_weather(
     if weather_data and (weather_data.get("cod") == 200 or str(weather_data.get("cod")) == "200"):
         actual_city_name_from_api = weather_data.get("name");
         if coords and actual_city_name_from_api: # Проверяем, что есть название города
-            city_display_name = f"за вашими координатами, м. {actual_city_name_from_api}"
+            city_display_name = f"Прогноз за вашими координатами, м. {actual_city_name_from_api}"
         elif coords:
             city_display_name = "за вашими координатами"
         elif city_input:
