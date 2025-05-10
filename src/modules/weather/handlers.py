@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.db.models import User
 from .keyboard import (
     get_weather_actions_keyboard, CALLBACK_WEATHER_OTHER_CITY, CALLBACK_WEATHER_REFRESH,
-    get_weather_enter_city_back_keyboard, CALLBACK_WEATHER_BACK_TO_main,
+    get_weather_enter_city_back_keyboard, CALLBACK_WEATHER_BACK_TO_MAIN, # <-- ИСПРАВЛЕНО
     get_save_city_keyboard, CALLBACK_WEATHER_SAVE_CITY_YES, CALLBACK_WEATHER_SAVE_CITY_NO,
     CALLBACK_WEATHER_FORECAST_5D, CALLBACK_WEATHER_SHOW_CURRENT, get_forecast_keyboard
 )

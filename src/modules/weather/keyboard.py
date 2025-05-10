@@ -17,7 +17,12 @@ CALLBACK_WEATHER_SHOW_CURRENT = f"{WEATHER_PREFIX}:show_current"
 
 def get_save_city_keyboard() -> InlineKeyboardMarkup:
     # ... (без изменений) ...
-     builder = InlineKeyboardBuilder(); builder.row(InlineKeyboardButton(text="💾 Так, зберегти", callback_data=CALLBACK_WEATHER_SAVE_CITY_YES), InlineKeyboardButton(text="❌ Ні", callback_data=CALLBACK_WEATHER_SAVE_CITY_NO)); return builder.as_markup()
+     builder = InlineKeyboardBuilder()
+     builder.row(
+        InlineKeyboardButton(text="💾 Так, зберегти", callback_data=CALLBACK_WEATHER_SAVE_CITY_YES),
+        InlineKeyboardButton(text="❌ Ні", callback_data=CALLBACK_WEATHER_SAVE_CITY_NO)
+    )
+     return builder.as_markup()
 
 def get_weather_actions_keyboard() -> InlineKeyboardMarkup:
     """ Клавиатура с действиями ПОСЛЕ показа погоды: Другой город / Обновить / Прогноз 5д """
@@ -35,7 +40,11 @@ def get_weather_actions_keyboard() -> InlineKeyboardMarkup:
 
 def get_weather_enter_city_back_keyboard() -> InlineKeyboardMarkup:
     # ... (без изменений) ...
-     builder = InlineKeyboardBuilder(); builder.row(InlineKeyboardButton(text="⬅️ Назад в меню", callback_data=CALLBACK_WEATHER_BACK_TO_MAIN)); return builder.as_markup()
+     builder = InlineKeyboardBuilder()
+     builder.row(
+        InlineKeyboardButton(text="⬅️ Назад в меню", callback_data=CALLBACK_WEATHER_BACK_TO_MAIN)
+    )
+     return builder.as_markup()
 
 # --- Новая клавиатура для прогноза ---
 def get_forecast_keyboard() -> InlineKeyboardMarkup:
