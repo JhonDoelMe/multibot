@@ -4,7 +4,8 @@ import asyncio
 import logging
 import sys
 from contextlib import suppress
-import aiohttp # Добавлен импорт aiohttp
+import aiohttp
+from typing import Optional # <<< ИСПРАВЛЕНИЕ: Добавлен импорт Optional
 
 from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
@@ -113,7 +114,7 @@ async def main() -> None:
     # sock_read - таймаут на чтение данных из сокета
     # sock_connect - таймаут на соединение с сокетом (часть connect)
     timeout = aiohttp.ClientTimeout(
-        total=config.API_SESSION_TOTAL_TIMEOUT,  # Общий таймаут на запрос-ответ
+        total=config.API_SESSION_TOTAL_TIMEOUT,  # Общий таймаут на запрос-ответ сессии
         connect=config.API_SESSION_CONNECT_TIMEOUT # Таймаут на установку соединения
         # Можно добавить и другие: sock_connect, sock_read
     )
