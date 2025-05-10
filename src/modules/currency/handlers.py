@@ -1,8 +1,8 @@
-# src/modules/currency/handlers.py (Исправлена IndentationError)
+# src/modules/currency/handlers.py
 
 import logging
 from typing import Union, Optional
-from aiogram import Bot, Router, F # Добавлен Bot
+from aiogram import Bot, Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup
 from sqlalchemy.ext.asyncio import AsyncSession # Пока не используется здесь
 
@@ -28,8 +28,10 @@ async def currency_entry_point(target: Union[Message, CallbackQuery], bot: Bot):
     reply_markup = get_currency_type_keyboard() # Клавиатура выбора типа
     message_to_edit_or_answer = target.message if isinstance(target, CallbackQuery) else target
 
+    # ИСПРАВЛЕНИЕ: Улучшенная обработка ошибок при отправке/редактировании сообщения
     if isinstance(target, CallbackQuery):
-        await target.answer() # Отвечаем на колбэк
+        try: await target.answer() # Отвечаем на колбэк
+        except Exception as e: logger.warning(f"Could not answer callback in currency_entry_point: {e}")
         # Пытаемся отредактировать сообщение
         try:
             await message_to_edit_or_answer.edit_text(text, reply_markup=reply_markup)
@@ -42,17 +44,22 @@ async def currency_entry_point(target: Union[Message, CallbackQuery], bot: Bot):
                  logger.error(f"Could not send new message either in currency_entry_point: {e2}")
     else:
         # Если это было не CallbackQuery (а Message), просто отправляем новое сообщение
-        await target.answer(text, reply_markup=reply_markup)
+        try: await target.answer(text, reply_markup=reply_markup)
+        except Exception as e: logger.error(f"Error sending message in currency_entry_point: {e}")
 
 
 async def _show_rates(bot: Bot, callback: CallbackQuery, cash: bool):
     """ Вспомогательная функция для запроса и отображения курсов. """
     rate_type_name = "Готівковий курс ПриватБанку" if cash else "Безготівковий курс ПриватБанку"
     user_id = callback.from_user.id
-    await callback.answer() # Отвечаем на колбэк сразу
+    # Отвечаем на колбэк сразу
+    try: await callback.answer()
+    except Exception as e: logger.warning(f"Could not answer callback in _show_rates: {e}")
+
 
     # Редактируем сообщение на "Загрузка..." БЕЗ клавиатуры
     status_message = None
+    # ИСПРАВЛЕНИЕ: Улучшенная обработка ошибок при редактировании статусного сообщения
     try:
         status_message = await callback.message.edit_text(f"⏳ Отримую {rate_type_name.lower()}...")
     except Exception as e:
@@ -62,16 +69,21 @@ async def _show_rates(bot: Bot, callback: CallbackQuery, cash: bool):
     rates = await get_pb_exchange_rates(bot, cash=cash) # Передаем bot
     reply_markup = None # Клавиатура после показа курса не нужна
 
-    if rates:
+    if rates is not None: # Проверяем, что не None (т.е. не было критической ошибки API)
         message_text = format_rates_message(rates, rate_type_name)
-        logger.info(f"Sent {rate_type_name} rates to user {user_id}.")
+        if "Не вдалося отримати" not in message_text: # Дополнительная проверка на ошибку внутри форматировщика
+             logger.info(f"Sent {rate_type_name} rates to user {user_id}.")
+        else:
+             logger.warning(f"Formatted message indicated error for {rate_type_name} rates for user {user_id}.")
     else:
-        message_text = f"😔 Не вдалося отримати {rate_type_name.lower()}. Спробуйте пізніше."
-        logger.warning(f"Failed to get {rate_type_name} rates for user {user_id}.")
+        message_text = f"😥 Не вдалося отримати {rate_type_name.lower()}. Спробуйте пізніше."
+        logger.warning(f"Failed to get {rate_type_name} rates for user {user_id} (API service returned None).")
 
     # Редактируем сообщение, показывая курсы БЕЗ инлайн клавиатуры
+    # ИСПРАВЛЕНИЕ: Улучшенная обработка ошибок при редактировании финального сообщения
+    final_target_message = status_message if status_message else callback.message # Ensure final_target_message is set
     try:
-         await status_message.edit_text(message_text, reply_markup=reply_markup)
+         await final_target_message.edit_text(message_text, reply_markup=reply_markup)
     except Exception as e:
          logger.error(f"Failed to edit message with rates: {e}")
          try: # Fallback to answer if edit fails

@@ -78,7 +78,8 @@ async def get_current_weather_weatherapi(bot: Bot, *, location: str) -> Optional
                         try:
                             data = await response.json()
                             if "error" in data:
-                                logger.warning(f"WeatherAPI.com returned an error for '{location}': {data['error']}")
+                                # ИСПРАВЛЕНИЕ: Логируем ошибку API WeatherAPI.com как error
+                                logger.error(f"WeatherAPI.com returned an error for '{location}': {data['error']}")
                                 return data
                             logger.debug(f"WeatherAPI.com current weather response for '{location}': status={response.status}, data preview={str(data)[:300]}")
                             return data
@@ -86,13 +87,16 @@ async def get_current_weather_weatherapi(bot: Bot, *, location: str) -> Optional
                             logger.error(f"Attempt {attempt + 1}: Failed to decode JSON from WeatherAPI.com for '{location}'. Response: {response_data_text[:500]}")
                             return {"error": {"code": 500, "message": "Невірний формат JSON відповіді від резервного API"}}
                     elif response.status == 400:
-                         logger.warning(f"WeatherAPI.com returned 400 Bad Request for '{location}'. Response: {response_data_text[:500]}")
+                         # ИСПРАВЛЕНИЕ: Логируем ошибку API WeatherAPI.com как error
+                         logger.error(f"WeatherAPI.com returned 400 Bad Request for '{location}'. Response: {response_data_text[:500]}")
                          try: data = await response.json(); return data
                          except: return {"error": {"code": 400, "message": "Некоректний запит до резервного API"}}
                     elif response.status == 401:
+                        # ИСПРАВЛЕНИЕ: Логируем ошибку API WeatherAPI.com как error
                         logger.error(f"WeatherAPI.com returned 401 Unauthorized (Invalid API key).")
                         return {"error": {"code": 401, "message": "Невірний ключ резервного API погоди"}}
                     elif response.status == 403:
+                        # ИСПРАВЛЕНИЕ: Логируем ошибку API WeatherAPI.com как error
                         logger.error(f"WeatherAPI.com returned 403 Forbidden (Key disabled or over quota).")
                         return {"error": {"code": 403, "message": "Доступ до резервного API погоди заборонено (можливо, перевищено ліміт)"}}
                     elif response.status >= 500 or response.status == 429:
@@ -148,7 +152,8 @@ async def get_forecast_weatherapi(bot: Bot, *, location: str, days: int = 3) -> 
                         try:
                             data = await response.json()
                             if "error" in data:
-                                logger.warning(f"WeatherAPI.com returned an error for forecast '{location}', {days}d: {data['error']}")
+                                # ИСПРАВЛЕНИЕ: Логируем ошибку API WeatherAPI.com как error
+                                logger.error(f"WeatherAPI.com returned an error for forecast '{location}', {days}d: {data['error']}")
                                 return data
                             logger.debug(f"WeatherAPI.com forecast response for '{location}', {days}d: status={response.status}, data preview={str(data)[:300]}")
                             return data
@@ -156,13 +161,16 @@ async def get_forecast_weatherapi(bot: Bot, *, location: str, days: int = 3) -> 
                             logger.error(f"Attempt {attempt + 1}: Failed to decode JSON forecast from WeatherAPI.com for '{location}'. Response: {response_data_text[:500]}")
                             return {"error": {"code": 500, "message": "Невірний формат JSON відповіді від резервного API прогнозу"}}
                     elif response.status == 400:
-                         logger.warning(f"WeatherAPI.com returned 400 Bad Request for forecast '{location}'. Response: {response_data_text[:500]}")
+                         # ИСПРАВЛЕНИЕ: Логируем ошибку API WeatherAPI.com как error
+                         logger.error(f"WeatherAPI.com returned 400 Bad Request for forecast '{location}'. Response: {response_data_text[:500]}")
                          try: data = await response.json(); return data
                          except: return {"error": {"code": 400, "message": "Некоректний запит до резервного API прогнозу"}}
                     elif response.status == 401:
+                        # ИСПРАВЛЕНИЕ: Логируем ошибку API WeatherAPI.com як error
                         logger.error(f"WeatherAPI.com returned 401 Unauthorized for forecast (Invalid API key).")
                         return {"error": {"code": 401, "message": "Невірний ключ резервного API прогнозу"}}
                     elif response.status == 403:
+                        # ИСПРАВЛЕНИЕ: Логируем ошибку API WeatherAPI.com як error
                         logger.error(f"WeatherAPI.com returned 403 Forbidden for forecast (Key disabled or over quota).")
                         return {"error": {"code": 403, "message": "Доступ до резервного API прогнозу заборонено"}}
                     elif response.status >= 500 or response.status == 429:

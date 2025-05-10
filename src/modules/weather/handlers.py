@@ -3,11 +3,11 @@
 import logging
 import re
 from typing import Union, Optional, Dict, Any
-from aiogram import Bot, Router, F, MagicFilter
+from aiogram import Bot, Router, F # MagicFilter удален, если не используется
 from aiogram.filters import StateFilter
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup # <<< ИСПРАВЛЕНИЕ: Добавлен StatesGroup
+from aiogram.fsm.state import State, StatesGroup
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # Импорты
@@ -28,13 +28,9 @@ from src.handlers.utils import show_main_menu_message
 logger = logging.getLogger(__name__)
 router = Router(name="weather-module")
 
-class WeatherStates(StatesGroup): # Теперь StatesGroup определен
+class WeatherStates(StatesGroup):
     waiting_for_city = State()
     waiting_for_save_decision = State()
-
-# ... (остальной код файла остается без изменений) ...
-# (код _get_and_show_weather, weather_entry_point, handle_location_when_waiting, 
-#  process_main_geolocation_button, handle_city_input и всех колбэков остается здесь)
 
 async def _get_and_show_weather(
     bot: Bot, target: Union[Message, CallbackQuery], state: FSMContext, session: AsyncSession,
@@ -51,16 +47,28 @@ async def _get_and_show_weather(
 
     try:
         action_text = "🔍 Отримую дані про погоду..."
+        # ИСПРАВЛЕНИЕ: Улучшенная обработка ошибок при отправке/редактировании статусного сообщения
         if isinstance(target, CallbackQuery):
-            status_message = await message_to_edit_or_answer.edit_text(action_text)
-            await target.answer()
+            try:
+                status_message = await message_to_edit_or_answer.edit_text(action_text)
+                await target.answer()
+            except Exception as e:
+                 logger.error(f"Error editing message for initial status in _get_and_show_weather (callback): {e}")
+                 # Fallback to sending a new message if editing fails
+                 try: status_message = await target.message.answer(action_text); await target.answer()
+                 except Exception as e2: logger.error(f"Error sending new message for initial status (callback fallback): {e2}"); status_message = message_to_edit_or_answer # Final fallback
         elif hasattr(target, 'location') and target.location:
-            status_message = await target.answer(action_text)
+             try: status_message = await target.answer(action_text)
+             except Exception as e: logger.error(f"Error sending message for initial status in _get_and_show_weather (location): {e}"); status_message = target # Fallback
         else:
-            status_message = await target.answer(action_text)
+            try: status_message = await target.answer(action_text)
+            except Exception as e: logger.error(f"Error sending message for initial status in _get_and_show_weather (message): {e}"); status_message = target # Fallback
+
     except Exception as e:
-        logger.error(f"Error sending/editing status message for weather: {e}")
-        status_message = message_to_edit_or_answer
+        # This outer except might catch errors before sending any message, less likely now
+        logger.error(f"Unexpected error before sending/editing status message for weather: {e}")
+        status_message = message_to_edit_or_answer # Ensure status_message is set even on error
+
 
     weather_data = None
     preferred_city_from_db = None
@@ -101,9 +109,11 @@ async def _get_and_show_weather(
             logger.info(f"_get_and_show_weather: For city_input='{city_input}', preferred_city_from_db='{preferred_city_from_db}', api_city_name='{api_city_name}', is_preferred={is_preferred}")
     else:
         logger.error(f"No city_input or coords provided for user {user_id} in _get_and_show_weather.")
-        if status_message: await status_message.edit_text("Помилка: Не вказано місто або координати.")
-        else: await message_to_edit_or_answer.answer("Помилка: Не вказано місто або координати.")
-        await state.clear()
+        # ИСПРАВЛЕНИЕ: Улучшенная обработка ошибок при отправке финального повідомлення про помилку
+        error_text = "Помилка: Не вказано місто або координати."
+        try: await final_target_message.edit_text(error_text)
+        except Exception as e: logger.error(f"Failed to edit message with 'no city/coords' error: {e}"); try: await message_to_edit_or_answer.answer(error_text); except Exception as e2: logger.error(f"Failed to send 'no city/coords' error message either: {e2}")
+        await state.set_state(None) # Use set_state(None) instead of clear() here as well for consistency
         return
 
     final_target_message = status_message if status_message else message_to_edit_or_answer
@@ -153,65 +163,87 @@ async def _get_and_show_weather(
         else:
             reply_markup = get_weather_actions_keyboard()
             current_fsm_state_name = await state.get_state()
+            # ИСПРАВЛЕНИЕ: Используем set_state(None) чтобы выйти из текущего состояния, если это не состояние сохранения
+            # Проверяем, находится ли пользователь в состоянии waiting_for_city
             if current_fsm_state_name == WeatherStates.waiting_for_city.state:
-                logger.info(f"User {user_id}: Weather shown (city '{city_input}' is preferred or from geo). Clearing FSM state from waiting_for_city.")
-                await state.set_state(None)
+                 logger.info(f"User {user_id}: Weather shown (city '{city_input}' is preferred or from geo). Setting FSM state to None from waiting_for_city.")
+                 await state.set_state(None)
+        # ИСПРАВЛЕНИЕ: Улучшенная обработка ошибок при отправке финального сообщения
         try:
             await final_target_message.edit_text(text_to_send, reply_markup=reply_markup)
         except Exception as e:
             logger.error(f"Failed to edit final weather message: {e}")
             try: await message_to_edit_or_answer.answer(text_to_send, reply_markup=reply_markup)
             except Exception as e2: logger.error(f"Failed to send new final weather message either: {e2}")
+
     elif weather_data and (str(weather_data.get("cod")) == "404"):
         city_error_name = city_input if city_input else "вказана локація"
         error_text = f"😔 На жаль, місто/локація '<b>{city_error_name}</b>' не знайдено."
         reply_markup = get_weather_enter_city_back_keyboard()
+        # ИСПРАВЛЕНИЕ: Улучшенная обработка ошибок при отправке финального сообщения
         try: await final_target_message.edit_text(error_text, reply_markup=reply_markup)
         except Exception as e:
             logger.error(f"Failed to edit 404 error message: {e}")
             try: await message_to_edit_or_answer.answer(error_text, reply_markup=reply_markup)
             except Exception as e2: logger.error(f"Failed to send new 404 error message either: {e2}")
-        logger.warning(f"Location '{request_details}' not found for user {user_id} (404). Clearing FSM state.")
-        await state.clear()
+        logger.warning(f"Location '{request_details}' not found for user {user_id} (404). Setting FSM state to None.")
+        await state.set_state(None) # Use set_state(None) instead of clear()
+
     else:
         error_code = weather_data.get('cod', 'N/A') if weather_data else 'N/A'
         error_api_message = weather_data.get('message', 'Internal error') if weather_data else 'Internal error'
         error_text = f"😥 Вибачте, сталася помилка при отриманні погоди для {request_details} (Код: {error_code} - {error_api_message}). Спробуйте пізніше."
         reply_markup = get_weather_enter_city_back_keyboard()
+        # ИСПРАВЛЕНИЕ: Улучшенная обработка ошибок при отправке финального сообщения
         try: await final_target_message.edit_text(error_text, reply_markup=reply_markup)
         except Exception as e:
             logger.error(f"Failed to edit other error message: {e}")
             try: await message_to_edit_or_answer.answer(error_text, reply_markup=reply_markup)
             except Exception as e2: logger.error(f"Failed to send new other error message either: {e2}")
-        logger.error(f"Failed to get weather for {request_details} for user {user_id}. API Response: {weather_data}. Clearing FSM state.")
-        await state.clear()
+        logger.error(f"Failed to get weather for {request_details} for user {user_id}. API Response: {weather_data}. Setting FSM state to None.")
+        await state.set_state(None) # Use set_state(None) instead of clear()
+
 
 async def weather_entry_point(
     target: Union[Message, CallbackQuery], state: FSMContext, session: AsyncSession, bot: Bot
 ):
     user_id = target.from_user.id
-    if isinstance(target, Message) or \
-       (isinstance(target, CallbackQuery) and not target.data.startswith(CALLBACK_WEATHER_REFRESH.split(':')[0])): # Пример проверки, что это не коллбэк этого же модуля
-        current_fsm_state_name = await state.get_state()
-        if current_fsm_state_name is not None and current_fsm_state_name.startswith("WeatherStates"):
-             logger.info(f"User {user_id}: Clearing previous weather FSM state ({current_fsm_state_name}) at weather_entry_point.")
-             await state.clear()
-        elif current_fsm_state_name is None and isinstance(target, Message):
-             await state.clear() # Очистит данные, если состояние None
-             logger.info(f"User {user_id}: State was None, cleared data at weather_entry_point on Message.")
+    # Логика очистки состояния, если пользователь не в состоянии погоды
+    current_fsm_state_name = await state.get_state()
+    # Логіка перевірки та очищення стану при вході в модуль погоди.
+    # Залишаємо state.clear() при вході ззовні для повного скидання стану,
+    # якщо це не продовження поточного стану погоди.
+    if current_fsm_state_name is not None and current_fsm_state_name.startswith("WeatherStates"):
+         logger.info(f"User {user_id}: Already in a WeatherStates ({current_fsm_state_name}) at weather_entry_point.")
+         # Не очищаємо стан, якщо вже в стані погоди
+    elif current_fsm_state_name is not None:
+        # В іншому стані FSM, очищаємо його
+        logger.info(f"User {user_id}: In another FSM state ({current_fsm_state_name}), clearing before main weather.")
+        await state.clear() # Очищаем весь FSM state, так как входим в новый модуль
+    else: # current_fsm_state_name is None
+        logger.info(f"User {user_id}: State was None, clearing data at weather_entry_point.")
+        await state.clear() # Очищаем данные, если состояние None
 
     message_to_edit_or_answer = target.message if isinstance(target, CallbackQuery) else target
     db_user = await session.get(User, user_id)
-    if isinstance(target, CallbackQuery): await target.answer()
+    # ИСПРАВЛЕНИЕ: Обработка случая, если target - CallbackQuery и answer() вызывает ошибку
+    if isinstance(target, CallbackQuery):
+        try: await target.answer()
+        except Exception as e: logger.warning(f"Could not answer callback in weather_entry_point: {e}")
+
     preferred_city = db_user.preferred_city if db_user else None
     logger.info(f"weather_entry_point: User {user_id}, preferred_city from DB: '{preferred_city}'")
     if preferred_city:
+        # Встановлюємо стан ПЕРЕД викликом _get_and_show_weather, якщо погода буде показана одразу
+        # Це важливо, щоб _get_and_show_weather знала, в якому стані завершити
+        await state.set_state(WeatherStates.waiting_for_save_decision) # Початковий стан після показу погоди
         await _get_and_show_weather(bot, target, state, session, city_input=preferred_city)
     else:
         log_msg = f"User {user_id}" + ("" if db_user else " (new user or DB error)") + " has no preferred city."
         logger.info(log_msg)
         text = "🌍 Будь ласка, введіть назву міста або надішліть геолокацію:"
         reply_markup = get_weather_enter_city_back_keyboard()
+        # ИСПРАВЛЕНИЕ: Улучшенная обработка ошибок при отправке сообщения
         try:
             if isinstance(target, CallbackQuery): await message_to_edit_or_answer.edit_text(text, reply_markup=reply_markup)
             else: await message_to_edit_or_answer.answer(text, reply_markup=reply_markup)
@@ -223,6 +255,7 @@ async def weather_entry_point(
         await state.set_state(WeatherStates.waiting_for_city)
         logger.info(f"User {user_id}: Set FSM state to WeatherStates.waiting_for_city.")
 
+
 @router.message(WeatherStates.waiting_for_city, F.location)
 async def handle_location_when_waiting(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
     if message.location:
@@ -230,48 +263,72 @@ async def handle_location_when_waiting(message: Message, state: FSMContext, sess
         lon = message.location.longitude
         user_id = message.from_user.id
         logger.info(f"MAIN weather module: handle_location_when_waiting for user {user_id}: lat={lat}, lon={lon}")
+        # Устанавливаем состояние перед показом
+        await state.set_state(WeatherStates.waiting_for_save_decision) # Початковий стан після показу погоди
         await _get_and_show_weather(bot, message, state, session, coords={"lat": lat, "lon": lon})
     else:
         logger.warning(f"User {message.from_user.id}: handle_location_when_waiting (main weather) called without message.location.")
-        await message.reply("Не вдалося отримати вашу геолокацію.")
+        # ИСПРАВЛЕНИЕ: Улучшенная обработка ошибок при отправке сообщения
+        try: await message.reply("Не вдалося отримати вашу геолокацію.")
+        except Exception as e: logger.error(f"Error sending 'cannot get location' message: {e}")
 
 async def process_main_geolocation_button(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
+    # Эта функция вызывается из common_handlers.handle_any_geolocation
+    # common_handlers уже установил state в None при необходимости
     if message.location:
         lat = message.location.latitude
         lon = message.location.longitude
         user_id = message.from_user.id
         logger.info(f"MAIN weather module: process_main_geolocation_button for user {user_id}: lat={lat}, lon={lon}")
-        current_fsm_state_name = await state.get_state()
-        if current_fsm_state_name is not None:
-            logger.info(f"User {user_id}: Clearing FSM state ({current_fsm_state_name}) before main weather by location button.")
-            await state.clear()
+        # Устанавливаем состояние перед показом
+        await state.set_state(WeatherStates.waiting_for_save_decision) # Початковий стан після показу погоди
+        # Передаем обработку в основную функцию показа погоды
         await _get_and_show_weather(bot, message, state, session, coords={"lat": lat, "lon": lon})
     else:
         logger.warning(f"User {message.from_user.id}: process_main_geolocation_button called without message.location.")
+        # ИСПРАВЛЕНИЕ: Улучшенная обработка ошибок при отправке сообщения
+        try: await message.reply("Не вдалося отримати вашу геолокацію.")
+        except Exception as e: logger.error(f"Error sending 'cannot get location' message (from button): {e}")
+
 
 @router.message(WeatherStates.waiting_for_city, F.text)
 async def handle_city_input(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
     user_city_input = message.text.strip() if message.text else ""
     logger.info(f"handle_city_input: User {message.from_user.id} entered city '{user_city_input}'. Current FSM state: {await state.get_state()}")
     if not user_city_input:
-        await message.answer("😔 Будь ласка, введіть назву міста (текст не може бути порожнім).", reply_markup=get_weather_enter_city_back_keyboard())
+        # ИСПРАВЛЕНИЕ: Улучшенная обработка ошибок при отправке сообщения
+        try: await message.answer("😔 Будь ласка, введіть назву міста (текст не може бути порожнім).", reply_markup=get_weather_enter_city_back_keyboard())
+        except Exception as e: logger.error(f"Error sending empty city input message: {e}")
         return
     if len(user_city_input) > 100:
-        await message.answer("😔 Назва міста занадто довга (максимум 100 символів). Спробуйте ще раз.", reply_markup=get_weather_enter_city_back_keyboard())
+        # ИСПРАВЛЕНИЕ: Улучшенная обработка ошибок при отправке сообщения
+        try: await message.answer("😔 Назва міста занадто довга (максимум 100 символів). Спробуйте ще раз.", reply_markup=get_weather_enter_city_back_keyboard())
+        except Exception as e: logger.error(f"Error sending city name too long message: {e}")
         return
     if not re.match(r"^[A-Za-zА-Яа-яЁёІіЇїЄє\s\-\.\']+$", user_city_input):
-        await message.answer("😔 Назва міста може містити лише літери, пробіли, дефіси, апострофи та крапки. Спробуйте ще раз.", reply_markup=get_weather_enter_city_back_keyboard())
+        # ИСПРАВЛЕНИЕ: Улучшенная обработка ошибок при отправке сообщения
+        try: await message.answer("😔 Назва міста може містити лише літери, пробіли, дефіси, апострофи та крапки. Спробуйте ще раз.", reply_markup=get_weather_enter_city_back_keyboard())
+        except Exception as e: logger.error(f"Error sending invalid city name chars message: {e}")
         return
+    # Устанавливаем состояние перед показом
+    await state.set_state(WeatherStates.waiting_for_save_decision) # Початковий стан після показу погоди
     await _get_and_show_weather(bot, message, state, session, city_input=user_city_input)
 
 @router.callback_query(F.data == CALLBACK_WEATHER_OTHER_CITY)
 async def handle_action_other_city(callback: CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
     logger.info(f"User {user_id} requested OTHER city. Current FSM state before setting waiting_for_city: {await state.get_state()}, data: {await state.get_data()}")
-    await callback.message.edit_text("🌍 Введіть назву іншого міста:", reply_markup=get_weather_enter_city_back_keyboard())
+    # ИСПРАВЛЕНИЕ: Улучшенная обработка ошибок при редактировании/отправке сообщения
+    try: await callback.message.edit_text("🌍 Введіть назву іншого міста:", reply_markup=get_weather_enter_city_back_keyboard())
+    except Exception as e:
+        logger.error(f"Failed to edit message for 'other city' input: {e}")
+        try: await callback.message.answer("🌍 Введіть назву іншого міста:", reply_markup=get_weather_enter_city_back_keyboard())
+        except Exception as e2: logger.error(f"Failed to send message for 'other city' input either: {e2}")
     await state.set_state(WeatherStates.waiting_for_city)
     logger.info(f"User {user_id}: Set FSM state to WeatherStates.waiting_for_city (from Other City callback).")
-    await callback.answer()
+    try: await callback.answer() # Отвечаем на колбэк
+    except Exception as e: logger.warning(f"Could not answer callback in handle_action_other_city: {e}")
+
 
 @router.callback_query(F.data == CALLBACK_WEATHER_REFRESH)
 async def handle_action_refresh(callback: CallbackQuery, state: FSMContext, session: AsyncSession, bot: Bot):
@@ -280,12 +337,20 @@ async def handle_action_refresh(callback: CallbackQuery, state: FSMContext, sess
     current_fsm_state_name_on_refresh = await state.get_state()
     logger.info(f"User {user_id} requested REFRESH (main weather). Current FSM state: {current_fsm_state_name_on_refresh}, FSM data: {user_data}")
     coords = user_data.get("current_coords")
-    city_name_to_refresh = user_data.get("current_shown_city") 
+    city_name_to_refresh = user_data.get("current_shown_city")
+    # Отвечаем на колбэк сразу
+    try: await callback.answer("Оновлюю дані...")
+    except Exception as e: logger.warning(f"Could not answer callback in handle_action_refresh: {e}")
+
     if coords:
         logger.info(f"User {user_id} refreshing main weather by coords: {coords}")
+        # Устанавливаем состояние перед показом
+        await state.set_state(WeatherStates.waiting_for_save_decision) # Початковий стан після показу погоди
         await _get_and_show_weather(bot, callback, state, session, coords=coords)
     elif city_name_to_refresh:
         logger.info(f"User {user_id} refreshing main weather for city: '{city_name_to_refresh}'")
+        # Устанавливаем состояние перед показом
+        await state.set_state(WeatherStates.waiting_for_save_decision) # Початковий стан після показу погоди
         await _get_and_show_weather(bot, callback, state, session, city_input=city_name_to_refresh)
     else:
         logger.warning(f"User {user_id} requested REFRESH (main), but no city_name_to_refresh or coords found in FSM state. Attempting preferred city from DB.")
@@ -293,12 +358,21 @@ async def handle_action_refresh(callback: CallbackQuery, state: FSMContext, sess
         preferred_city_from_db = db_user.preferred_city if db_user else None
         if preferred_city_from_db:
             logger.info(f"User {user_id}: No specific city in state for main refresh, using preferred city '{preferred_city_from_db}' from DB.")
+            # Устанавливаем состояние перед показом
+            await state.set_state(WeatherStates.waiting_for_save_decision) # Початковий стан після показу погоди
             await _get_and_show_weather(bot, callback, state, session, city_input=preferred_city_from_db)
         else:
             logger.warning(f"User {user_id}: No city in state and no preferred city in DB for main refresh. Asking to input city.")
-            await callback.message.edit_text("😔 Не вдалося визначити місто для оновлення. Будь ласка, введіть місто:", reply_markup=get_weather_enter_city_back_keyboard())
+            # ИСПРАВЛЕНИЕ: Улучшенная обработка ошибок при редактировании/отправке сообщения
+            error_text = "😔 Не вдалося визначити місто для оновлення. Будь ласка, введіть місто:"
+            reply_markup = get_weather_enter_city_back_keyboard()
+            try: await callback.message.edit_text(error_text, reply_markup=reply_markup)
+            except Exception as e:
+                logger.error(f"Failed to edit message after refresh failure: {e}")
+                try: await callback.message.answer(error_text, reply_markup=reply_markup)
+                except Exception as e2: logger.error(f"Failed to send message after refresh failure either: {e2}")
             await state.set_state(WeatherStates.waiting_for_city)
-            await callback.answer("Не вдалося оновити", show_alert=True)
+            # callback.answer() уже сделан выше
 
 @router.callback_query(WeatherStates.waiting_for_save_decision, F.data == CALLBACK_WEATHER_SAVE_CITY_YES)
 async def handle_save_city_yes(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
@@ -307,11 +381,22 @@ async def handle_save_city_yes(callback: CallbackQuery, state: FSMContext, sessi
     logger.info(f"User {user_id} chose YES to save city. FSM state: {await state.get_state()}, FSM data BEFORE save: {user_data}")
     city_to_actually_save_in_db = user_data.get("city_to_save")
     city_name_user_saw_in_prompt = user_data.get("city_display_name", city_to_actually_save_in_db)
+    # Отвечаем на колбэк сразу
+    try: await callback.answer("Зберігаю місто...")
+    except Exception as e: logger.warning(f"Could not answer callback in handle_save_city_yes: {e}")
+
     if not city_to_actually_save_in_db:
         logger.error(f"User {user_id}: 'city_to_save' is missing in FSM data. Cannot save. Data: {user_data}")
-        await callback.message.edit_text("Помилка: не вдалося визначити місто для збереження.", reply_markup=get_weather_actions_keyboard())
-        await state.set_state(None) 
-        await callback.answer("Помилка збереження", show_alert=True)
+        # ИСПРАВЛЕНИЕ: Улучшенная обработка ошибок при редактировании/отправке сообщения
+        error_text = "Помилка: не вдалося визначити місто для збереження."
+        reply_markup = get_weather_actions_keyboard()
+        try: await callback.message.edit_text(error_text, reply_markup=reply_markup)
+        except Exception as e:
+            logger.error(f"Failed to edit message after save failure (no city_to_save): {e}")
+            try: await callback.message.answer(error_text, reply_markup=reply_markup)
+            except Exception as e2: logger.error(f"Failed to send message after save failure either: {e2}")
+        await state.set_state(None)
+        # callback.answer() уже сделан выше
         return
     db_user = await session.get(User, user_id)
     if db_user:
@@ -319,23 +404,47 @@ async def handle_save_city_yes(callback: CallbackQuery, state: FSMContext, sessi
             old_preferred_city = db_user.preferred_city
             db_user.preferred_city = city_to_actually_save_in_db
             session.add(db_user)
+            # Коммит будет выполнен DbSessionMiddleware
             logger.info(f"User {user_id}: Preferred city changed from '{old_preferred_city}' to '{city_to_actually_save_in_db}' for DB commit. User saw prompt for '{city_name_user_saw_in_prompt}'.")
             text_after_save = f"✅ Місто <b>{city_name_user_saw_in_prompt}</b> збережено як основне."
             await state.update_data(preferred_city_from_db=city_to_actually_save_in_db)
             logger.debug(f"User {user_id}: Updated 'preferred_city_from_db' in FSM state to '{city_to_actually_save_in_db}' after saving.")
             fsm_data_after_save_logic = await state.get_data()
-            logger.debug(f"User {user_id}: FSM data AFTER save logic and state update, BEFORE clearing state enum: {fsm_data_after_save_logic}")
-            await callback.message.edit_text(text_after_save, reply_markup=get_weather_actions_keyboard())
+            logger.debug(f"User {user_id}: FSM data AFTER save logic and state update, BEFORE setting state to None: {fsm_data_after_save_logic}")
+            # ИСПРАВЛЕНИЕ: Улучшенная обработка ошибок при редактировании/отправке сообщения
+            reply_markup = get_weather_actions_keyboard()
+            try: await callback.message.edit_text(text_after_save, reply_markup=reply_markup)
+            except Exception as e:
+                logger.error(f"Failed to edit message after successful save: {e}")
+                try: await callback.message.answer(text_after_save, reply_markup=reply_markup)
+                except Exception as e2: logger.error(f"Failed to send message after successful save either: {e2}")
+
         except Exception as e:
             logger.exception(f"User {user_id}: DB error while saving preferred city '{city_to_actually_save_in_db}': {e}", exc_info=True)
-            await session.rollback()
-            await callback.message.edit_text("😥 Виникла помилка під час збереження міста.", reply_markup=get_weather_actions_keyboard())
+            await session.rollback() # Rollback explicitly on error
+            # ИСПРАВЛЕНИЕ: Улучшенная обработка ошибок при редактировании/отправке сообщения
+            error_text = "😥 Виникла помилка під час збереження міста."
+            reply_markup = get_weather_actions_keyboard()
+            try: await callback.message.edit_text(error_text, reply_markup=reply_markup)
+            except Exception as e:
+                logger.error(f"Failed to edit message after DB save error: {e}")
+                try: await callback.message.answer(error_text, reply_markup=reply_markup)
+                except Exception as e2: logger.error(f"Failed to send message after DB save error either: {e2}")
     else:
         logger.error(f"User {user_id} not found in DB during save city.")
-        await callback.message.edit_text("Помилка: не вдалося знайти ваші дані.", reply_markup=get_weather_actions_keyboard())
-    await state.set_state(None) 
-    logger.info(f"User {user_id}: Cleared FSM state enum (was WeatherStates.waiting_for_save_decision) after saving city. Data should persist for user.")
-    await callback.answer("Місто збережено!")
+        # ИСПРАВЛЕНИЕ: Улучшенная обработка ошибок при редактировании/отправке сообщения
+        error_text = "Помилка: не вдалося знайти ваші дані."
+        reply_markup = get_weather_actions_keyboard()
+        try: await callback.message.edit_text(error_text, reply_markup=reply_markup)
+        except Exception as e:
+            logger.error(f"Failed to edit message after DB user not found error: {e}")
+            try: await callback.message.answer(error_text, reply_markup=reply_markup)
+            except Exception as e2: logger.error(f"Failed to send message after DB user not found error either: {e2}")
+            
+    await state.set_state(None) # Use set_state(None) instead of clear()
+    logger.info(f"User {user_id}: Set FSM state to None (was WeatherStates.waiting_for_save_decision) after saving city. Data should persist for user.")
+    # callback.answer() уже сделан выше
+
 
 @router.callback_query(WeatherStates.waiting_for_save_decision, F.data == CALLBACK_WEATHER_SAVE_CITY_NO)
 async def handle_save_city_no(callback: CallbackQuery, state: FSMContext):
@@ -346,10 +455,19 @@ async def handle_save_city_no(callback: CallbackQuery, state: FSMContext):
     original_weather_message_parts = callback.message.text.split('\n\n💾 Зберегти', 1)
     weather_part = original_weather_message_parts[0] if original_weather_message_parts else "Дані про погоду"
     text_after_no_save = f"{weather_part}\n\n(Місто <b>{city_display_name_from_prompt}</b> не було збережено як основне)"
-    await callback.message.edit_text(text_after_no_save, reply_markup=get_weather_actions_keyboard())
-    await state.set_state(None)
-    logger.info(f"User {user_id}: Cleared FSM state enum (was WeatherStates.waiting_for_save_decision) after NOT saving city. Data should persist.")
-    await callback.answer("Місто не збережено.")
+    # ИСПРАВЛЕНИЕ: Улучшенная обработка ошибок при редактировании/отправке сообщения
+    reply_markup = get_weather_actions_keyboard()
+    try: await callback.message.edit_text(text_after_no_save, reply_markup=reply_markup)
+    except Exception as e:
+        logger.error(f"Failed to edit message after user chose NOT to save city: {e}")
+        try: await callback.message.answer(text_after_no_save, reply_markup=reply_markup)
+        except Exception as e2: logger.error(f"Failed to send message after user chose NOT to save city either: {e2}")
+
+    await state.set_state(None) # Use set_state(None) instead of clear()
+    logger.info(f"User {user_id}: Set FSM state to None (was WeatherStates.waiting_for_save_decision) after NOT saving city. Data should persist.")
+    try: await callback.answer("Місто не збережено.") # Отвечаем на колбэк
+    except Exception as e: logger.warning(f"Could not answer callback in handle_save_city_no: {e}")
+
 
 @router.callback_query(F.data == CALLBACK_WEATHER_FORECAST_5D)
 async def handle_forecast_request(callback: CallbackQuery, state: FSMContext, session: AsyncSession, bot: Bot):
@@ -360,22 +478,49 @@ async def handle_forecast_request(callback: CallbackQuery, state: FSMContext, se
     display_name_for_forecast_header = user_data.get("city_display_name", city_name_for_api_request)
     if not city_name_for_api_request:
         logger.warning(f"User {user_id} requested forecast (main), but 'current_shown_city' not found. Data: {user_data}")
-        await callback.answer("Спочатку отримайте погоду для міста.", show_alert=True)
+        try: await callback.answer("Спочатку отримайте погоду для міста.", show_alert=True) # Отвечаем на колбэк с alert
+        except Exception as e: logger.warning(f"Could not answer callback (no city for forecast): {e}")
         return
-    await callback.answer("Отримую прогноз на 5 днів...")
-    status_message = await callback.message.edit_text(f"⏳ Отримую прогноз для: <b>{display_name_for_forecast_header}</b>...")
+    # Отвечаем на колбэк сразу
+    try: await callback.answer("Отримую прогноз на 5 днів...")
+    except Exception as e: logger.warning(f"Could not answer callback in handle_forecast_request: {e}")
+
+    # ИСПРАВЛЕНИЕ: Улучшенная обработка ошибок при редактировании/отправке сообщения о статусе
+    status_message = None
+    try: status_message = await callback.message.edit_text(f"⏳ Отримую прогноз для: <b>{display_name_for_forecast_header}</b>...")
+    except Exception as e:
+        logger.error(f"Failed to edit message for forecast status: {e}")
+        try: status_message = await callback.message.answer(f"⏳ Отримую прогноз для: <b>{display_name_for_forecast_header}</b>...")
+        except Exception as e2: logger.error(f"Failed to send forecast status message either: {e2}"); status_message = callback.message # Fallback
+
     forecast_api_data = await get_5day_forecast(bot, city_name_for_api_request)
+    final_target_message = status_message if status_message else callback.message # Ensure final_target_message is set
+
     if forecast_api_data and str(forecast_api_data.get("cod")) == "200":
         message_text = format_forecast_message(forecast_api_data, display_name_for_forecast_header)
         reply_markup = get_forecast_keyboard()
-        await status_message.edit_text(message_text, reply_markup=reply_markup)
+        # ИСПРАВЛЕНИЕ: Улучшенная обработка ошибок при редактировании/отправке финального сообщения
+        try: await final_target_message.edit_text(message_text, reply_markup=reply_markup)
+        except Exception as e:
+            logger.error(f"Failed to edit final forecast message: {e}")
+            try: await callback.message.answer(message_text, reply_markup=reply_markup)
+            except Exception as e2: logger.error(f"Failed to send new final forecast message either: {e2}")
         logger.info(f"User {user_id}: Sent 5-day forecast (main) for API city '{city_name_for_api_request}' (display: '{display_name_for_forecast_header}').")
+        # Можно установить состояние WeatherStates.showing_forecast здесь, если нужно
+        # await state.set_state(WeatherStates.showing_forecast)
     else:
         error_code = forecast_api_data.get('cod', 'N/A') if forecast_api_data else 'N/A'
         error_api_message = forecast_api_data.get('message', 'Невідома помилка API') if forecast_api_data else 'Не вдалося з\'єднатися з API'
         error_text = f"😥 Не вдалося отримати прогноз для <b>{display_name_for_forecast_header}</b>.\n<i>Помилка: {error_api_message} (Код: {error_code})</i>"
-        await status_message.edit_text(error_text, reply_markup=get_weather_actions_keyboard())
+        reply_markup = get_weather_actions_keyboard()
+        # ИСПРАВЛЕНИЕ: Улучшенная обробка помилок при редактировании/отправці фінального повідомлення
+        try: await final_target_message.edit_text(error_text, reply_markup=reply_markup)
+        except Exception as e:
+            logger.error(f"Failed to edit message after forecast failure: {e}")
+            try: await callback.message.answer(error_text, reply_markup=reply_markup)
+            except Exception as e2: logger.error(f"Failed to send message after forecast failure either: {e2}")
         logger.error(f"User {user_id}: Failed to get 5-day forecast (main) for API city '{city_name_for_api_request}'. API Response: {forecast_api_data}")
+
 
 @router.callback_query(F.data == CALLBACK_WEATHER_SHOW_CURRENT)
 async def handle_show_current_weather(callback: CallbackQuery, state: FSMContext, session: AsyncSession, bot: Bot):
@@ -384,6 +529,10 @@ async def handle_show_current_weather(callback: CallbackQuery, state: FSMContext
     logger.info(f"User {user_id} requested to show CURRENT weather again (main, from forecast view). FSM data: {user_data}")
     city_to_show_current = user_data.get("current_shown_city")
     coords_to_show_current = user_data.get("current_coords")
+    # Отвечаем на колбэк сразу
+    try: await callback.answer("Показую поточну погоду...")
+    except Exception as e: logger.warning(f"Could not answer callback in handle_show_current_weather: {e}")
+
     if coords_to_show_current:
         logger.info(f"User {user_id}: Showing current weather (main) by COORDS again: {coords_to_show_current}")
         await _get_and_show_weather(bot, callback, state, session, coords=coords_to_show_current)
@@ -399,15 +548,25 @@ async def handle_show_current_weather(callback: CallbackQuery, state: FSMContext
             await _get_and_show_weather(bot, callback, state, session, city_input=preferred_city_from_db)
         else:
             logger.warning(f"User {user_id}: No city in state and no preferred city (main). Redirecting to city input.")
-            await callback.message.edit_text("🌍 Будь ласка, введіть назву міста:", reply_markup=get_weather_enter_city_back_keyboard())
+            # ИСПРАВЛЕНИЕ: Улучшенная обработка ошибок при редактировании/отправке сообщения
+            error_text = "🌍 Будь ласка, введіть назву міста:"
+            reply_markup = get_weather_enter_city_back_keyboard()
+            try: await callback.message.edit_text(error_text, reply_markup=reply_markup)
+            except Exception as e:
+                logger.error(f"Failed to edit message after show current failure: {e}")
+                try: await callback.message.answer(error_text, reply_markup=reply_markup)
+                except Exception as e2: logger.error(f"Failed to send message after show current failure either: {e2}")
             await state.set_state(WeatherStates.waiting_for_city)
-            await callback.answer("Вкажіть місто", show_alert=True)
+            # callback.answer() уже сделан выше
+
 
 @router.callback_query(F.data == CALLBACK_WEATHER_BACK_TO_MAIN)
 async def handle_weather_back_to_main(callback: CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
     current_fsm_state = await state.get_state()
-    logger.info(f"User {user_id} requested back to main menu from weather module. Current FSM state: {current_fsm_state}. Clearing weather FSM state.")
-    await state.clear()
+    logger.info(f"User {user_id} requested back to main menu from weather module. Current FSM state: {current_fsm_state}. Setting weather FSM state to None.")
+    await state.set_state(None) # Use set_state(None) instead of clear()
     await show_main_menu_message(callback)
-    await callback.answer()
+    # show_main_menu_message уже делает callback.answer()
+    # try: await callback.answer() # Отвечаем на колбэк
+    # except Exception as e: logger.warning(f"Could not answer callback in handle_weather_back_to_main: {e}")

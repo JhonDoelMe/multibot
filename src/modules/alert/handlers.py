@@ -19,10 +19,19 @@ async def _show_alerts(bot: Bot, target: Union[Message, CallbackQuery]): # <<< �
     user_id = target.from_user.id
     message_to_edit_or_answer = target.message if isinstance(target, CallbackQuery) else target
     status_message = None
+
+    # ИСПРАВЛЕНИЕ: Улучшенная обработка ошибок при отправке/редактировании статусного сообщения
     try: # Отправка статуса
-        if isinstance(target, CallbackQuery): status_message = await message_to_edit_or_answer.edit_text("⏳ Отримую актуальний статус тривог..."); await target.answer()
-        else: status_message = await message_to_edit_or_answer.answer("⏳ Отримую актуальний статус тривог...")
-    except Exception as e: logger.error(f"Error sending/editing status message for alerts: {e}"); status_message = message_to_edit_or_answer
+        if isinstance(target, CallbackQuery):
+            try: status_message = await message_to_edit_or_answer.edit_text("⏳ Отримую актуальний статус тривог..."); await target.answer()
+            except Exception as e: logger.error(f"Error editing message for initial status in _show_alerts (callback): {e}"); try: status_message = await target.message.answer("⏳ Отримую актуальний статус тривог..."); await target.answer(); except Exception as e2: logger.error(f"Error sending new message for initial status (callback fallback): {e2}"); status_message = message_to_edit_or_answer # Final fallback
+        else: # Message
+            try: status_message = await message_to_edit_or_answer.answer("⏳ Отримую актуальний статус тривог...")
+            except Exception as e: logger.error(f"Error sending message for initial status in _show_alerts (message): {e}"); status_message = message_to_edit_or_answer # Fallback
+    except Exception as e:
+         logger.error(f"Unexpected error before sending/editing status message for alerts: {e}")
+         status_message = message_to_edit_or_answer # Ensure status_message is set even on error
+
 
     alerts_data = await get_active_alerts(bot) # <<< Передаем bot
     message_text = format_alerts_message(alerts_data)
@@ -30,6 +39,8 @@ async def _show_alerts(bot: Bot, target: Union[Message, CallbackQuery]): # <<< �
 
     # Определяем финальное сообщение для редактирования
     final_target_message = status_message if status_message else message_to_edit_or_answer
+
+    # ИСПРАВЛЕНИЕ: Улучшенная обработка ошибок при редактировании/отправке финального сообщения
     try: # Редактирование финального сообщения
         await final_target_message.edit_text(message_text, reply_markup=reply_markup)
         logger.info(f"Sent alert status to user {user_id}.")

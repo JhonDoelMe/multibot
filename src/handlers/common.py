@@ -3,7 +3,6 @@
 import logging
 from typing import Union
 from aiogram import Bot, Router, F
-from aiogram.types import Message, CallbackQuery
 from aiogram.filters import CommandStart, StateFilter # StateFilter может понадобиться для геолокации
 from aiogram.fsm.context import FSMContext
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,7 +30,7 @@ from src.handlers.utils import show_main_menu_message
 
 logger = logging.getLogger(__name__)
 router = Router(name="common-handlers")
-# location_router больше не нужен в том виде, как был, 
+# location_router больше не нужен в том виде, как был,
 # так как у нас будет одна кнопка геолокации, и ее обработчик будет в этом же роутере.
 
 
@@ -59,7 +58,7 @@ async def _get_user_or_default_settings(session: AsyncSession, user_id: int) -> 
 
 @router.message(CommandStart())
 async def handle_start(message: Message, session: AsyncSession, state: FSMContext):
-    await state.clear() # Очищаем любое предыдущее состояние
+    await state.clear() # Очищаем любое предыдущее состояние (для команды /start это обычно желательно)
     user_tg = message.from_user
     if not user_tg:
         logger.warning("Received /start from a user with no user info.")
@@ -84,10 +83,10 @@ async def handle_start(message: Message, session: AsyncSession, state: FSMContex
         if db_user.preferred_alert_service is None:
             db_user.preferred_alert_service = ServiceChoice.UKRAINEALARM
             needs_update = True
-        if needs_update: 
+        if needs_update:
             logger.info(f"User {user_id} ('{username}') found. Updating info/default settings...")
             session.add(db_user)
-        else: 
+        else:
             logger.info(f"User {user_id} ('{username}') found. No info update needed.")
     else:
         logger.info(f"User {user_id} ('{username}') not found. Creating with default service settings...")
@@ -131,16 +130,21 @@ async def handle_location_text_button(message: Message): # Этот хендле
 
 @router.message(F.location) # Общий обработчик для любой присланной геолокации
 async def handle_any_geolocation(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
-    user_settings = await _get_user_or_default_settings(session, message.from_user.id)
-    logger.info(f"User {message.from_user.id} sent geolocation. Preferred weather service: {user_settings.preferred_weather_service}")
-    
-    # Очищаем состояние FSM перед вызовом модуля погоды, чтобы избежать конфликтов
-    # если пользователь был в каком-то другом состоянии.
+    user_id = message.from_user.id
+    lat = message.location.latitude
+    lon = message.location.longitude
+    user_settings = await _get_user_or_default_settings(session, user_id)
+    logger.info(f"User {user_id} sent geolocation. Preferred weather service: {user_settings.preferred_weather_service}")
+
+    # Выходим из текущего состояния FSM gracefully, сохраняя данные
     current_fsm_state = await state.get_state()
     if current_fsm_state is not None:
-        logger.info(f"Clearing FSM state '{current_fsm_state}' before processing geolocation.")
-        await state.clear()
+        logger.info(f"Exiting FSM state '{current_fsm_state}' before processing geolocation.")
+        # ИСПРАВЛЕНИЕ: Используем set_state(None) вместо clear()
+        await state.set_state(None)
+        logger.debug(f"User {user_id}: Set FSM state to None (from {current_fsm_state}) after receiving geolocation.")
 
+    # Теперь передаем обработку соответствующему модулю погоды
     if user_settings.preferred_weather_service == ServiceChoice.WEATHERAPI:
         # Вызываем функцию обработки геолокации из резервного модуля
         await weather_backup_geolocation_entry_point(message, state, session, bot)
