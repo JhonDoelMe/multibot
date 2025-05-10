@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.db.models import User
 from .keyboard import (
     get_weather_actions_keyboard, CALLBACK_WEATHER_OTHER_CITY, CALLBACK_WEATHER_REFRESH,
-    get_weather_enter_city_back_keyboard, CALLBACK_WEATHER_BACK_TO_MAIN, # <-- ИСПРАВЛЕНО
+    get_weather_enter_city_back_keyboard, CALLBACK_WEATHER_BACK_TO_MAIN,
     get_save_city_keyboard, CALLBACK_WEATHER_SAVE_CITY_YES, CALLBACK_WEATHER_SAVE_CITY_NO,
     CALLBACK_WEATHER_FORECAST_5D, CALLBACK_WEATHER_SHOW_CURRENT, get_forecast_keyboard
 )
@@ -35,55 +35,28 @@ async def _get_and_show_weather(
     bot: Bot, target: Union[Message, CallbackQuery], state: FSMContext, session: AsyncSession,
     city_input: Optional[str] = None, coords: Optional[Dict[str, float]] = None
 ):
-    user_id = target.from_user.id
-    message_to_edit_or_answer = target.message if isinstance(target, CallbackQuery) else target
-    status_message = None
-    is_preferred = False
-    request_details = ""
-    try:  # Отправка статуса
-        if isinstance(target, CallbackQuery):
-            status_message = await message_to_edit_or_answer.edit_text("🔍 Отримую дані про погоду...")
-            await target.answer()
-        elif target.location:
-            status_message = await target.answer("🔍 Отримую дані про погоду...")
-        else:
-            status_message = await target.answer("🔍 Отримую дані про погоду...")
-    except Exception as e:
-        logger.error(f"Error sending/editing status message: {e}")
-        status_message = message_to_edit_or_answer
-
-    weather_data = None
-    preferred_city = None
-    city_to_save_in_db = None  # Инициализация
-    if coords:
-        request_details = f"coords ({coords['lat']:.4f}, {coords['lon']:.4f})"
-        logger.info(f"User {user_id} req weather by {request_details}")
-        weather_data = await get_weather_data_by_coords(bot, coords['lat'], coords['lon'])
-        is_preferred = False
-    elif city_input:  # Определение is_preferred
-        request_details = f"city '{city_input}'"
-        logger.info(f"User {user_id} req weather by {request_details}")
-        weather_data = await get_weather_data(bot, city_input)
-        db_user = await session.get(User, user_id)
-        preferred_city = db_user.preferred_city if db_user else None
-        if preferred_city and weather_data and weather_data.get("cod") == 200:
-            api_city_name = weather_data.get("name")
-            if api_city_name and preferred_city.lower() == api_city_name.lower():
-                is_preferred = True
-            elif preferred_city.lower() == city_input.lower():
-                is_preferred = True
-            city_to_save_in_db = api_city_name  # Сохраняем сюда
-    else:
-        logger.error(f"No city/coords provided for user {user_id}")
-        await status_message.edit_text("Помилка: Не вказано.")
-        await state.clear()
-        return
+    user_id = target.from_user.id; message_to_edit_or_answer = target.message if isinstance(target, CallbackQuery) else target; status_message = None; is_preferred = False; request_details = ""
+    try: # Отправка статуса
+        if isinstance(target, CallbackQuery): status_message = await message_to_edit_or_answer.edit_text("🔍 Отримую дані про погоду..."); await target.answer()
+        elif target.location: status_message = await target.answer("🔍 Отримую дані про погоду...")
+        else: status_message = await target.answer("🔍 Отримую дані про погоду...")
+    except Exception as e: logger.error(f"Error sending/editing status message: {e}"); status_message = message_to_edit_or_answer
+    weather_data = None; preferred_city = None; city_to_save_in_db = None  # Инициализация
+    if coords: request_details = f"coords ({coords['lat']:.4f}, {coords['lon']:.4f})"; logger.info(f"User {user_id} req weather by {request_details}"); weather_data = await get_weather_data_by_coords(bot, coords['lat'], coords['lon']); is_preferred = False
+    elif city_input: # Определение is_preferred
+         request_details = f"city '{city_input}'"; logger.info(f"User {user_id} req weather by {request_details}"); weather_data = await get_weather_data(bot, city_input)
+         db_user = await session.get(User, user_id); preferred_city = db_user.preferred_city if db_user else None
+         if preferred_city and weather_data and weather_data.get("cod") == 200:
+              api_city_name = weather_data.get("name"); city_to_save_in_db = api_city_name  # Сохраняем сюда
+              if api_city_name and preferred_city.lower() == api_city_name.lower(): is_preferred = True
+              elif preferred_city.lower() == city_input.lower(): is_preferred = True
+    else: logger.error(f"No city/coords provided for user {user_id}"); await status_message.edit_text("Помилка: Не вказано."); await state.clear(); return
     final_target_message = status_message if status_message else message_to_edit_or_answer
 
     # Обработка ответа API
     if weather_data and (weather_data.get("cod") == 200 or str(weather_data.get("cod")) == "200"):
-        actual_city_name_from_api = weather_data.get("name")
-        if coords and not actual_city_name_from_api:
+        actual_city_name_from_api = weather_data.get("name");
+        if coords:
             city_display_name = "за вашими координатами"
         elif city_input:
             city_display_name = city_input.capitalize()
@@ -141,7 +114,7 @@ async def _get_and_show_weather(
         except Exception as e:
             logger.error(f"Failed to edit error message (other): {e}")
             try:  # Новый try на новой строке
-                await message_to_edit_or_answer.answer(error_text, reply_markup=reply_markup)
+                await message_to_edit_or_answer.answer(text_to_send, reply_markup=reply_markup)
             except Exception as e2:
                 logger.error(f"Failed to send error message (other) either: {e2}")
         logger.error(f"Failed to get weather for {request_details} for user {user_id}. Code: {error_code}, Msg: {error_api_message}")
@@ -238,8 +211,8 @@ async def handle_save_city_yes(callback: CallbackQuery, state: FSMContext, sessi
     user_id = callback.from_user.id
     if not city_to_save_in_db or not city_display_name:
         logger.error(f"... city name not found ...")
-        from src.handlers.utils import show_main_menu_message
-        await show_main_menu_message(callback, "Помилка: не вдалося...")
+        await callback.message.answer("Помилка: не вдалося...")
+        await show_main_menu_message(callback)
         return
     db_user = await session.get(User, user_id)
     if db_user:
