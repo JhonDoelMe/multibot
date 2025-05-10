@@ -85,7 +85,8 @@ async def _fetch_and_show_backup_weather(
 
     if show_forecast:
         api_response_data = await get_forecast_weatherapi(bot, location=location_input, days=3)
-        formatted_message_text = format_forecast_backup_message(api_response_data, requested_location=display_location_for_message)
+        # ВИПРАВЛЕНО: display_location_for_message замінено на location_input
+        formatted_message_text = format_forecast_backup_message(api_response_data, requested_location=location_input)
         if api_response_data and "error" not in api_response_data:
             reply_markup = get_forecast_weather_backup_keyboard()
             await state.set_state(WeatherBackupStates.showing_forecast)
@@ -94,7 +95,8 @@ async def _fetch_and_show_backup_weather(
             await state.set_state(None)
     else:
         api_response_data = await get_current_weather_weatherapi(bot, location=location_input)
-        formatted_message_text = format_weather_backup_message(api_response_data, requested_location=display_location_for_message)
+        # ВИПРАВЛЕНО: display_location_for_message замінено на location_input
+        formatted_message_text = format_weather_backup_message(api_response_data, requested_location=location_input)
         if api_response_data and "error" not in api_response_data:
             reply_markup = get_current_weather_backup_keyboard()
             await state.set_state(WeatherBackupStates.showing_current)

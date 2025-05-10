@@ -5,6 +5,7 @@ from typing import Union
 from aiogram import Bot, Router, F
 from aiogram.filters import CommandStart, StateFilter # StateFilter может понадобиться для геолокации
 from aiogram.fsm.context import FSMContext
+from aiogram.types import Message # <<< ДОДАНО ІМПОРТ
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.models import User, ServiceChoice # Импортируем ServiceChoice
