@@ -39,65 +39,105 @@ async def get_pb_exchange_rates(bot: Bot, cash: bool = True) -> Optional[List[Di
                         try:
                             data = await response.json()
                             logger.info(f"PB API response: {data}")
+                            if not isinstance(data, list): # Добавим проверку, что ответ это список
+                                logger.error(f"PB API response is not a list: {data}")
+                                last_exception = TypeError("PB API response is not a list")
+                                # Сразу выходим, если формат ответа неожиданный
+                                return None # Или вернуть структуру ошибки {"status": "error", ...}
+                            
                             filtered_data = [
                                 item for item in data
-                                if item.get("ccy") in TARGET_CURRENCIES
+                                if isinstance(item, dict) and item.get("ccy") in TARGET_CURRENCIES
                             ]
                             if not filtered_data:
                                 logger.warning(f"No valid currency data found in PB response for cash={cash}")
-                                return None
+                                # Если API вернул 200, но данных нет, это не ошибка, а пустой результат
+                                return [] # Возвращаем пустой список, а не None
                             logger.info(f"Returning {len(filtered_data)} currency rates from API or cache")
                             return filtered_data
                         except aiohttp.ContentTypeError:
                             logger.error(f"Attempt {attempt + 1}: Failed to decode JSON from PB. Response: {await response.text()}")
-                            return None
-                    elif response.status == 429:
+                            last_exception = Exception("Invalid JSON response from PB")
+                            # Если ContentTypeError, последующие попытки вряд ли помогут
+                            return None # Или структуру ошибки
+                    elif response.status == 429: # Rate limit
                         last_exception = aiohttp.ClientResponseError(
                             response.request_info, response.history,
                             status=429, message="Rate limit exceeded"
                         )
                         logger.warning(f"Attempt {attempt + 1}: PB RateLimit Error (429). Retrying...")
-                    elif response.status >= 500:
+                    elif response.status >= 500: # Серверные ошибки
                         last_exception = aiohttp.ClientResponseError(
                             response.request_info, response.history,
                             status=response.status, message=f"Server error {response.status}"
                         )
                         logger.warning(f"Attempt {attempt + 1}: PB Server Error {response.status}. Retrying...")
-                    else:
+                    else: # Другие клиентские ошибки (4xx, кроме 429)
                         error_text = await response.text()
-                        logger.error(f"Attempt {attempt + 1}: PB Error {response.status}. Response: {error_text[:200]}")
-                        return None
+                        logger.error(f"Attempt {attempt + 1}: PB Client Error {response.status}. Response: {error_text[:200]}")
+                        # Для клиентских ошибок обычно нет смысла ретраить
+                        return None # Или структуру ошибки
 
         except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
             last_exception = e
             logger.warning(f"Attempt {attempt + 1}: Network error connecting to PB: {e}. Retrying...")
         except Exception as e:
             logger.exception(f"Attempt {attempt + 1}: An unexpected error occurred fetching PB rates: {e}", exc_info=True)
-            return None
+            return None # Или структуру ошибки
 
         if attempt < MAX_RETRIES - 1:
             delay = INITIAL_DELAY * (2 ** attempt)
             logger.info(f"Waiting {delay} seconds before next PB retry...")
             await asyncio.sleep(delay)
-        else:
+        else: # Все попытки исчерпаны
             logger.error(f"All {MAX_RETRIES} attempts failed for PB rates (cash={cash}). Last error: {last_exception!r}")
+            # Можно возвращать структуру ошибки для хендлера
+            # if isinstance(last_exception, aiohttp.ClientResponseError):
+            #     return {"status": "error", "code": last_exception.status, "message": ...}
             return None
-    return None
+    return None # Недостижимо
 
-def format_rates_message(rates_data: List[Dict[str, Any]], cash: bool = True) -> str:
+def format_rates_message(rates_data: Optional[List[Dict[str, Any]]], cash: bool = True) -> str: # rates_data может быть None
     """ Форматирует сообщение с курсами валют. """
     try:
-        if not rates_data:
+        # Изменили условие: rates_data может быть None или пустым списком
+        if rates_data is None: # Если была ошибка и вернулся None
             return "😥 Не вдалося отримати курси валют. Спробуйте пізніше."
+        if not rates_data: # Если API вернул пустой список (нет целевых валют)
+             return "⚠️ На даний момент інформація по курсам USD та EUR відсутня."
+
         course_type = "Готівковий" if cash else "Безготівковий"
+        # В оригинальном коде PB_API_URL_NONCASH (coursid=11) это "Курсы для карточных операций и Приват24"
+        # "Безготівковий" - это более общее понятие. Можно уточнить, если нужно.
         message_lines = [f"<b>{course_type} курс ПриватБанку:</b>\n"]
+        
+        found_currencies = False
         for rate in rates_data:
-            currency = rate.get("ccy", "N/A")
-            buy = float(rate.get("buy", "0"))
-            sale = float(rate.get("sale", "0"))
-            message_lines.append(
-                f"💵 <b>{currency}</b>: Купівля {buy:.2f} UAH | Продаж {sale:.2f} UAH"
-            )
+            currency = rate.get("ccy")
+            # Убедимся, что buy и sale существуют и являются числами
+            try:
+                buy_str = rate.get("buy")
+                sale_str = rate.get("sale")
+                if buy_str is None or sale_str is None:
+                    logger.warning(f"Missing buy/sale for {currency} in rates: {rate}")
+                    continue
+                
+                buy = float(buy_str)
+                sale = float(sale_str)
+                
+                base_ccy = rate.get("base_ccy", "UAH") # Обычно UAH для этого API
+
+                message_lines.append(
+                    f"💵 <b>{currency}/{base_ccy}</b>: Купівля {buy:.2f} | Продаж {sale:.2f}"
+                )
+                found_currencies = True
+            except (ValueError, TypeError) as e:
+                logger.error(f"Error parsing rate data for {currency}: {rate}, error: {e}")
+                continue
+        
+        if not found_currencies: # Если после фильтрации не осталось валидных курсов
+            return "⚠️ Не вдалося отримати дані по курсам USD та EUR."
+
         return "\n".join(message_lines)
     except Exception as e:
         logger.exception(f"Error formatting rates message: {e}")
