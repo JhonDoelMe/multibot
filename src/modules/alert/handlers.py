@@ -23,13 +23,25 @@ async def _show_alerts(bot: Bot, target: Union[Message, CallbackQuery]): # <<< �
     # ИСПРАВЛЕНИЕ: Исправлен синтаксис обработки ошибок при отправке/редактировании статусного сообщения
     try: # Отправка статуса
         if isinstance(target, CallbackQuery):
-            try: status_message = await message_to_edit_or_answer.edit_text("⏳ Отримую актуальний статус тривог...")
-            except Exception as e: logger.error(f"Error editing message for initial status in _show_alerts (callback): {e}"); try: status_message = await target.message.answer("⏳ Отримую актуальний статус тривог..."); except Exception as e2: logger.error(f"Error sending new message for initial status (callback fallback): {e2}"); status_message = message_to_edit_or_answer # Final fallback
-            try: await target.answer()
-            except Exception as e: logger.warning(f"Could not answer callback after status message: {e}")
+            try:
+                status_message = await message_to_edit_or_answer.edit_text("⏳ Отримую актуальний статус тривог...")
+            except Exception as e:
+                logger.error(f"Error editing message for initial status in _show_alerts (callback): {e}")
+                try:
+                    status_message = await target.message.answer("⏳ Отримую актуальний статус тривог...")
+                except Exception as e2:
+                    logger.error(f"Error sending new message for initial status (callback fallback): {e2}")
+                    status_message = message_to_edit_or_answer # Final fallback
+            try:
+                await target.answer()
+            except Exception as e:
+                logger.warning(f"Could not answer callback after status message: {e}")
         else: # Message
-            try: status_message = await message_to_edit_or_answer.answer("⏳ Отримую актуальний статус тривог...")
-            except Exception as e: logger.error(f"Error sending message for initial status in _show_alerts (message): {e}"); status_message = message_to_edit_or_answer # Fallback
+            try:
+                status_message = await message_to_edit_or_answer.answer("⏳ Отримую актуальний статус тривог...")
+            except Exception as e:
+                logger.error(f"Error sending message for initial status in _show_alerts (message): {e}")
+                status_message = message_to_edit_or_answer # Fallback
     except Exception as e:
          logger.error(f"Unexpected error before sending/editing status message for alerts: {e}")
          status_message = message_to_edit_or_answer # Ensure status_message is set even on error
