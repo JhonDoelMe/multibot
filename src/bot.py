@@ -13,14 +13,13 @@ from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler
 from aiohttp import web
 from aiogram.exceptions import TelegramNetworkError, TelegramAPIError, TelegramRetryAfter
-from aiogram.fsm.storage.memory import MemoryStorage # <<< ДОДАНО ІМПОРТ
+from aiogram.fsm.storage.memory import MemoryStorage
 
 from src import config
 from src.db.database import initialize_database
 from src.middlewares.db_session import DbSessionMiddleware
 from src.middlewares.rate_limit import ThrottlingMiddleware
 
-# Імпортуємо роутери
 from src.handlers import common as common_handlers
 from src.modules.weather import handlers as weather_handlers
 from src.modules.currency import handlers as currency_handlers
@@ -76,13 +75,13 @@ async def on_startup(bot: Bot, dispatcher: Dispatcher, base_url: Optional[str] =
 
 async def on_shutdown(bot: Optional[Bot]):
     logger.warning("Executing on_shutdown actions...")
-    # Основне закриття сесії бота відбувається в `finally` блоці `main`
     logger.warning("Bot shutdown actions complete.")
 
 async def main() -> None:
     logger.info("Starting main() function of the bot.")
     bot_instance: Optional[Bot] = None
     dp: Optional[Dispatcher] = None
+    aio_session: Optional[AiohttpSession] = None # Для явного закриття
 
     try:
         logger.info("Attempting database initialization...")
@@ -96,7 +95,7 @@ async def main() -> None:
             logger.info("Database initialization successful.")
 
         logger.info("Initializing Aiogram components...")
-        storage = MemoryStorage() # Тепер MemoryStorage визначено
+        storage = MemoryStorage()
         
         aio_session = AiohttpSession() 
         logger.info("AiohttpSession initialized.")
@@ -112,6 +111,8 @@ async def main() -> None:
             logger.info(f"Aiogram Bot initialized. Default request_timeout for bot methods: {config.API_REQUEST_TIMEOUT}s.")
         except Exception as e:
             logger.exception("Critical: Failed to initialize Aiogram Bot object.", exc_info=True)
+            if aio_session: # Закриваємо сесію, якщо бот не створився
+                await aio_session.close()
             sys.exit("Critical: Bot initialization failed.")
 
         dp = Dispatcher(storage=storage)
@@ -136,12 +137,21 @@ async def main() -> None:
         dp.include_router(common_handlers.router)
         logger.info("All routers registered.")
 
+        # Переконуємося, що bot_instance та dp точно ініціалізовані перед on_startup
+        if not bot_instance or not dp:
+            logger.critical("Bot instance or Dispatcher is not initialized before on_startup. Exiting.")
+            if aio_session and not aio_session.closed: # Використовуємо .closed від aiohttp.ClientSession
+                 await aio_session.close()
+            sys.exit("Critical: Bot/Dispatcher not initialized.")
+
         await on_startup(bot_instance, dp, base_url=config.WEBHOOK_BASE_URL if config.RUN_WITH_WEBHOOK else None)
 
         if config.RUN_WITH_WEBHOOK:
             logger.warning("Starting bot in WEBHOOK mode...")
             if not config.WEBHOOK_BASE_URL:
                 logger.critical("WEBHOOK_BASE_URL is not set for webhook mode!")
+                if aio_session and not aio_session.closed:
+                    await aio_session.close()
                 sys.exit("Critical: WEBHOOK_BASE_URL not configured.")
 
             app = web.Application()
@@ -177,6 +187,14 @@ async def main() -> None:
             
             for attempt_polling in range(max_polling_retries):
                 try:
+                    # Переконуємося, що bot_instance та dp передаються в start_polling
+                    if not bot_instance or not dp:
+                         logger.critical("Bot instance or Dispatcher is not available for polling. Exiting.")
+                         # Потрібно закрити сесію перед виходом, якщо вона була створена
+                         if aio_session and hasattr(aio_session, 'closed') and not aio_session.closed:
+                             await aio_session.close()
+                         sys.exit("Critical: Bot/Dispatcher not available for polling.")
+
                     await dp.start_polling(
                         bot_instance,
                         allowed_updates=dp.resolve_used_update_types(),
@@ -208,11 +226,24 @@ async def main() -> None:
         logger.critical(f"Critical error in main function before bot run loop: {e}", exc_info=True)
     finally:
         logger.warning("Closing bot session (in main finally block)...")
-        if bot_instance and hasattr(bot_instance, 'session') and bot_instance.session:
-            if not bot_instance.session.closed:
-                 await bot_instance.session.close()
-                 logger.warning("Bot aiohttp session closed.")
-            else:
+        # Використовуємо aio_session, яку ми створили, для закриття.
+        # bot_instance.session є посиланням на цю ж сесію.
+        if aio_session:
+            # aiohttp.ClientSession має атрибут .closed
+            if hasattr(aio_session, 'closed') and not aio_session.closed:
+                 try:
+                     await aio_session.close()
+                     logger.warning("Bot aiohttp session closed.")
+                 except Exception as e_close:
+                     logger.error(f"Error closing aiohttp session: {e_close}")
+            elif not hasattr(aio_session, 'closed'):
+                # Якщо атрибута .closed немає (малоймовірно для стандартного AiohttpSession, але для безпеки)
+                try:
+                    await aio_session.close()
+                    logger.warning("Bot aiohttp session closed (no .closed attribute check).")
+                except Exception as e_close:
+                    logger.error(f"Error closing aiohttp session (no .closed attr): {e_close}")
+            else: # aio_session.closed is True
                  logger.info("Bot aiohttp session was already closed.")
         
         await on_shutdown(bot_instance) 
