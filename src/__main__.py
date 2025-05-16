@@ -2,33 +2,39 @@
 
 import asyncio
 import logging
-import logging.handlers
+import logging.handlers # Для RotatingFileHandler
 import sys
 import os
 from datetime import datetime
 
 # --- Налаштування логування (має бути однією з перших операцій) ---
+# Змінні оточення для налаштування логування
 LOG_FILENAME = os.getenv("LOG_FILENAME", "bot.log")
 LOG_LEVEL_CONSOLE_STR = os.getenv("LOG_LEVEL_CONSOLE", "INFO").upper()
 LOG_LEVEL_FILE_STR = os.getenv("LOG_LEVEL_FILE", "INFO").upper()
-LOG_MAX_BYTES = int(os.getenv("LOG_MAX_BYTES", 10 * 1024 * 1024))
+LOG_MAX_BYTES = int(os.getenv("LOG_MAX_BYTES", 10 * 1024 * 1024)) # Збільшено до 10 MB
 LOG_BACKUP_COUNT = int(os.getenv("LOG_BACKUP_COUNT", 5))
 
+# Рівні логування за замовчуванням, якщо в змінних оточення помилка
 LOG_LEVEL_CONSOLE = getattr(logging, LOG_LEVEL_CONSOLE_STR, logging.INFO)
 LOG_LEVEL_FILE = getattr(logging, LOG_LEVEL_FILE_STR, logging.INFO)
 
+# Форматтер
 log_formatter = logging.Formatter(
     '%(asctime)s - %(levelname)s - %(name)s - %(module)s:%(lineno)d - %(message)s'
 )
 
+# Корневий логгер
 root_logger = logging.getLogger()
 root_logger.setLevel(logging.DEBUG) 
 
+# Обробник для консолі
 stream_handler = logging.StreamHandler(sys.stdout)
 stream_handler.setFormatter(log_formatter)
 stream_handler.setLevel(LOG_LEVEL_CONSOLE)
 root_logger.addHandler(stream_handler)
 
+# Обробник для файлу (з ротацією)
 try:
     log_dir = os.path.dirname(LOG_FILENAME)
     if log_dir and not os.path.exists(log_dir):
@@ -56,7 +62,7 @@ logger.debug(f"Log filename: {LOG_FILENAME}, Max bytes: {LOG_MAX_BYTES}, Backup 
 
 # --- Імпорт конфігурації ---
 try:
-    from src import config as app_config # Даємо псевдонім
+    from src import config as app_config 
     app_config.log_config_status() 
 except ImportError:
     logger.critical("Failed to import src.config. Critical error, cannot continue.", exc_info=True)
@@ -67,7 +73,7 @@ except Exception as e:
 
 
 # --- Ініціалізація Sentry/GlitchTip ---
-if app_config.SENTRY_DSN: # SENTRY_DSN тепер може містити значення з GLITCHTIP_DSN
+if app_config.SENTRY_DSN:
     try:
         import sentry_sdk
         from sentry_sdk.integrations.aiohttp import AioHttpIntegration
@@ -90,10 +96,8 @@ if app_config.SENTRY_DSN: # SENTRY_DSN тепер може містити зна
             ],
             traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", 0.2)),
             profiles_sample_rate=float(os.getenv("SENTRY_PROFILES_SAMPLE_RATE", 0.2)),
-            # ВИКОРИСТОВУЄМО НОВІ ЗМІННІ З КОНФІГУРАЦІЇ
             environment=app_config.BOT_ENVIRONMENT, 
             release=app_config.BOT_VERSION,
-            # send_default_pii=False, # За замовчуванням False
         )
         logger.info(f"Sentry/GlitchTip SDK initialized successfully. Environment: {app_config.BOT_ENVIRONMENT}, Version: {app_config.BOT_VERSION}")
     except ImportError:
@@ -105,11 +109,10 @@ else:
 
 
 # --- Налаштування aiocache ---
-# ... (код aiocache залишається без змін, оскільки нові змінні його не стосуються) ...
 if app_config.CACHE_BACKEND in ["memory", "redis"]:
     try:
-        from aiocache import caches, Cache
-        from aiocache.serializers import JsonSerializer
+        from aiocache import caches # Cache не потрібен для set_config
+        # from aiocache.serializers import JsonSerializer # JsonSerializer вже використовується в конфігурації
 
         cache_config_dict = {
             'default': {
@@ -141,35 +144,108 @@ if app_config.CACHE_BACKEND in ["memory", "redis"]:
     except Exception as e:
         logger.error(f"Failed to initialize aiocache: {e}", exc_info=True)
 else:
-    logger.info(f"Unsupported CACHE_BACKEND value: '{app_config.CACHE_BACKEND}'. Caching will be disabled.")
+    logger.info(f"Unsupported CACHE_BACKEND value: '{app_config.CACHE_BACKEND}'. Caching disabled.")
 
-# --- Імпорт та запуск бота ---
-try:
-    from src.bot import main as run_bot
-except ImportError as e_bot_import:
-     logger.critical("Failed to import src.bot.main.", exc_info=e_bot_import)
-     sys.exit("Critical: Failed to import core bot module.")
-except Exception as e_bot_module: 
-     logger.critical("An unexpected error occurred during 'src.bot' module import.", exc_info=e_bot_module)
-     sys.exit("Critical: Unexpected error during bot module import.")
+# --- Функція для запуску окремих завдань ---
+async def main_task_runner(task_name: str):
+    """
+    Ініціалізує необхідні компоненти та запускає вказане завдання.
+    """
+    # Конфігурація та логування вже мають бути ініціалізовані на момент виклику цієї функції.
+    logger.info(f"Task Runner: Starting task '{task_name}'...")
 
+    # 1. Ініціалізація бази даних (отримання session_factory)
+    # Використовуємо app_config, який вже імпортовано та завантажено
+    from src.db.database import initialize_database
+    db_initialized, session_factory = await initialize_database()
+    if not db_initialized or not session_factory:
+        logger.critical(f"Task Runner '{task_name}': Database could not be initialized. Exiting task.")
+        return
 
-if __name__ == "__main__":
-    logger.info(f"Initializing application via __main__.py (PID: {os.getpid()}). Timestamp: {datetime.now()}")
+    # 2. Ініціалізація екземпляра Bot
+    from aiogram import Bot, DefaultBotProperties
+    from aiogram.enums import ParseMode
+    from aiogram.client.session.aiohttp import AiohttpSession
+    
+    bot_session = None
+    bot_instance = None
     try:
-        asyncio.run(run_bot())
-    except (KeyboardInterrupt, SystemExit) as e:
-        logger.warning(f"Bot stopped by {type(e).__name__}.")
-        if app_config.SENTRY_DSN and 'sentry_sdk' in sys.modules and hasattr(sentry_sdk, 'Hub') and sentry_sdk.Hub.current.client:
-            logger.info("Flushing Sentry/GlitchTip events before exit...")
-            sentry_sdk.flush(timeout=3.0)
-            logger.info("Sentry/GlitchTip flush complete.")
-    except Exception as e_top_level:
-        logger.critical("Unhandled exception at the top level of asyncio.run.", exc_info=e_top_level)
-        if app_config.SENTRY_DSN and 'sentry_sdk' in sys.modules and hasattr(sentry_sdk, 'Hub') and sentry_sdk.Hub.current.client:
-            sentry_sdk.capture_exception(e_top_level)
-            sentry_sdk.flush(timeout=5.0)
+        bot_session = AiohttpSession()
+        bot_instance = Bot(
+            token=app_config.BOT_TOKEN,
+            default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+            session=bot_session
+        )
+        logger.info(f"Task Runner '{task_name}': Bot instance initialized.")
+
+        # 3. Виклик відповідного завдання
+        if task_name == "process_weather_reminders":
+            from src.scheduler_tasks import send_weather_reminders_task
+            await send_weather_reminders_task(session_factory, bot_instance)
+        # elif task_name == "another_task_name":
+        #     from src.some_other_module import run_another_task
+        #     await run_another_task(session_factory, bot_instance)
+        else:
+            logger.error(f"Task Runner: Unknown task name '{task_name}'. Nothing to run.")
+
+    except Exception as e_task:
+        logger.exception(f"Task Runner '{task_name}': An error occurred during task execution.", exc_info=e_task)
     finally:
-        logger.info("Application shutdown sequence initiated in __main__ finally block.")
-        logging.shutdown()
-        print(f"[{datetime.now()}] Application shutdown complete from __main__.py.", file=sys.stderr)
+        if bot_instance and bot_instance.session: # bot_instance.session це той самий aio_session
+            if hasattr(bot_instance.session, 'closed') and not bot_instance.session.closed:
+                await bot_instance.session.close()
+                logger.info(f"Task Runner '{task_name}': Bot session closed.")
+            elif not hasattr(bot_instance.session, 'closed'): # Fallback
+                await bot_instance.session.close()
+                logger.info(f"Task Runner '{task_name}': Bot session closed (no .closed check).")
+
+        logger.info(f"Task Runner: Task '{task_name}' finished.")
+
+
+# --- Точка входу програми ---
+if __name__ == "__main__":
+    # Перевіряємо, чи є аргумент для запуску завдання
+    # Наприклад: python -m src --task=process_weather_reminders
+    task_to_run = None
+    if len(sys.argv) > 1:
+        for arg in sys.argv[1:]:
+            if arg.startswith('--task='):
+                task_to_run = arg.split('=', 1)[1]
+                break
+    
+    if task_to_run:
+        logger.info(f"Received request to run specific task: {task_to_run}")
+        asyncio.run(main_task_runner(task_to_run))
+    else:
+        # Звичайний запуск основного бота
+        logger.info(f"Initializing application (main bot) via __main__.py (PID: {os.getpid()}). Timestamp: {datetime.now()}")
+        try:
+            from src.bot import main as run_bot # Імпортуємо тут, щоб уникнути циклічних залежностей на верхньому рівні
+            asyncio.run(run_bot())
+        except ImportError as e_bot_import:
+            logger.critical("Failed to import src.bot.main for main bot run.", exc_info=e_bot_import)
+            sys.exit("Critical: Failed to import core bot module for main run.")
+        except Exception as e_bot_module: 
+            logger.critical("An unexpected error occurred during 'src.bot' module import for main bot run.", exc_info=e_bot_module)
+            sys.exit("Critical: Unexpected error during bot module import for main run.")
+        except (KeyboardInterrupt, SystemExit) as e_interrupt: # Обробка тут, якщо run_bot() не обробив
+            logger.warning(f"Main bot run stopped by {type(e_interrupt).__name__}.")
+            if app_config.SENTRY_DSN and 'sentry_sdk' in sys.modules and hasattr(sentry_sdk, 'Hub') and sentry_sdk.Hub.current.client:
+                logger.info("Flushing Sentry/GlitchTip events before exit (from main bot interrupt)...")
+                sentry_sdk.flush(timeout=3.0)
+                logger.info("Sentry/GlitchTip flush complete (from main bot interrupt).")
+        except Exception as e_top_level: # Будь-які інші винятки під час asyncio.run(run_bot())
+            logger.critical("Unhandled exception at the top level of main bot asyncio.run.", exc_info=e_top_level)
+            if app_config.SENTRY_DSN and 'sentry_sdk' in sys.modules and hasattr(sentry_sdk, 'Hub') and sentry_sdk.Hub.current.client:
+                sentry_sdk.capture_exception(e_top_level)
+                sentry_sdk.flush(timeout=5.0)
+        finally:
+            # Цей finally блок для основного запуску бота
+            if not task_to_run: # Виконується тільки якщо це не запуск завдання
+                logger.info("Main bot application shutdown sequence initiated in __main__ finally block.")
+    
+    # Загальне завершення для обох випадків (запуск бота або завдання)
+    logging.shutdown()
+    print(f"[{datetime.now()}] Application __main__.py finished.", file=sys.stderr)
+
+# --- Кінець коду ---
