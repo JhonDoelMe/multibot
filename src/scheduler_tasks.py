@@ -4,7 +4,7 @@ import asyncio
 import logging
 from datetime import datetime, time as dt_time, timedelta, timezone
 
-from sqlalchemy import select, extract, or_
+from sqlalchemy import select, extract, or_, cast, Integer # Додано cast, Integer
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from aiogram import Bot
 from aiogram.exceptions import (
@@ -46,34 +46,32 @@ async def send_weather_reminders_task(
 
     now_localized = datetime.now(TZ_KYIV)
     current_time_for_check = now_localized.time().replace(second=0, microsecond=0)
-    
-    # Створюємо час для перевірки на хвилину раніше
     time_one_minute_ago = (now_localized - timedelta(minutes=1)).time().replace(second=0, microsecond=0)
 
     logger.info(f"Scheduler: Checking weather reminders for times around {current_time_for_check.strftime('%H:%M')} ({TZ_KYIV}). Will check current and previous minute.")
 
     async with session_factory() as session:
+        # ВИПРАВЛЕННЯ: Використовуємо CAST для порівняння з Integer,
+        # оскільки SQLite strftime повертає рядок, а PostgreSQL extract повертає число.
+        # CAST(... AS INTEGER) працюватиме для обох.
+        current_hour = current_time_for_check.hour
+        current_minute = current_time_for_check.minute
+        prev_hour = time_one_minute_ago.hour
+        prev_minute = time_one_minute_ago.minute
+
         stmt = (
             select(User)
             .where(User.weather_reminder_enabled == True)
             .where(User.weather_reminder_time != None)
-            # Перевіряємо поточну хвилину АБО попередню хвилину
             .where(
                 or_(
-                    (extract('hour', User.weather_reminder_time) == current_time_for_check.hour) &
-                    (extract('minute', User.weather_reminder_time) == current_time_for_check.minute),
-                    (extract('hour', User.weather_reminder_time) == time_one_minute_ago.hour) &
-                    (extract('minute', User.weather_reminder_time) == time_one_minute_ago.minute)
+                    (cast(extract('hour', User.weather_reminder_time), Integer) == current_hour) &
+                    (cast(extract('minute', User.weather_reminder_time), Integer) == current_minute),
+                    
+                    (cast(extract('hour', User.weather_reminder_time), Integer) == prev_hour) &
+                    (cast(extract('minute', User.weather_reminder_time), Integer) == prev_minute)
                 )
             )
-            # Щоб уникнути повторної відправки, якщо завдання запускається кілька разів протягом хвилини,
-            # або якщо користувач встановив нагадування на :00, а cron запускається на :00 і :01,
-            # потрібен механізм "вже надіслано сьогодні для цього часу".
-            # Для простоти, поки що без цього. Це означає, що якщо cron запускається
-            # кожну хвилину, і скрипт працює < 1 хв, нагадування буде надіслано один раз.
-            # Якщо скрипт працює > 1 хв і потрапляє на наступну хвилину, він може спробувати надіслати знову,
-            # якщо час нагадування = current_time_for_check або time_one_minute_ago для нового часу.
-            # Це потребує більш складної логіки відстеження.
         )
         
         result = await session.execute(stmt)
@@ -83,11 +81,7 @@ async def send_weather_reminders_task(
             logger.info(f"Scheduler: No users found for weather reminder for {time_one_minute_ago.strftime('%H:%M')} or {current_time_for_check.strftime('%H:%M')}.")
             return
 
-        # Фільтруємо, щоб уникнути дублів, якщо час нагадування потрапив в обидві хвилини
-        # (малоймовірно при порівнянні до хвилини, але для безпеки)
-        # Або краще обробляти "вже надіслано"
         processed_users_for_this_run = set()
-
         logger.info(f"Scheduler: Found {len(users_to_remind)} potential users for weather reminder.")
 
         successful_sends = 0
@@ -96,19 +90,13 @@ async def send_weather_reminders_task(
 
         for user in users_to_remind:
             if user.user_id in processed_users_for_this_run:
-                continue # Вже оброблено в цьому запуску (якщо запит повернув через OR)
+                continue 
             
-            # Тут потрібна логіка, щоб перевірити, чи для user.user_id та user.weather_reminder_time
-            # вже було надіслано нагадування СЬОГОДНІ.
-            # Наприклад, зберігати в БД (user_id, reminder_time_str, date_sent).
-            # Або простіше: якщо cron запускається кожну хвилину, то ризик дублювання невеликий.
-            # Поки що для тестування ця логіка відсутня.
-
             if not user.preferred_city:
                 logger.warning(f"Scheduler: User {user.user_id} has reminder enabled but no preferred_city set. Skipping.")
                 continue
             
-            logger.info(f"Scheduler: Processing reminder for user {user.user_id}, city: {user.preferred_city}, set time: {user.weather_reminder_time.strftime('%H:%M') if user.weather_reminder_time else 'N/A'}")
+            logger.info(f"Scheduler: Processing reminder for user {user.user_id} (chat_id), city: {user.preferred_city}, set time: {user.weather_reminder_time.strftime('%H:%M') if user.weather_reminder_time else 'N/A'}")
             
             weather_data_response: Optional[dict] = None
             formatted_weather: str = f"😔 Не вдалося отримати дані про погоду для м. {user.preferred_city} для вашого нагадування."
@@ -154,7 +142,7 @@ async def send_weather_reminders_task(
                 await bot_instance.send_message(user.user_id, message_to_send)
                 logger.info(f"Scheduler: Sent weather reminder to user {user.user_id} for city {user.preferred_city}.")
                 successful_sends += 1
-                processed_users_for_this_run.add(user.user_id) # Позначаємо, що обробили
+                processed_users_for_this_run.add(user.user_id)
             except TelegramRetryAfter as e_retry:
                 logger.warning(f"Scheduler: Flood control for user {user.user_id}. Retry after {e_retry.retry_after}s. Skipping.")
                 failed_sends += 1
@@ -176,10 +164,10 @@ async def send_weather_reminders_task(
         if users_to_disable_reminders:
             logger.info(f"Scheduler: Disabling reminders for {len(users_to_disable_reminders)} users.")
             for user_to_disable in users_to_disable_reminders:
-                if user_to_disable in session: # Перевірка, чи об'єкт ще в сесії
+                if user_to_disable in session:
                     user_to_disable.weather_reminder_enabled = False
                     session.add(user_to_disable)
-                else: # Якщо об'єкт від'єднаний, отримуємо його знову
+                else: 
                     user_from_db = await session.get(User, user_to_disable.user_id)
                     if user_from_db:
                         user_from_db.weather_reminder_enabled = False
