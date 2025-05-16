@@ -4,30 +4,23 @@ import logging
 import asyncio
 import aiohttp
 from typing import Optional, Dict, Any, List
-from datetime import datetime as dt_datetime, timedelta, timezone # Додано timedelta та dt_datetime, timezone
+from datetime import datetime as dt_datetime, timedelta, timezone
 import pytz
 from aiogram import Bot
 from aiocache import cached
 
 from src import config
-# Поки що не використовуємо нормалізатор, але якщо він буде, його треба буде імпортувати
-# from src.utils.city_normalizer import normalize_city_name_ukrainian 
 
 logger = logging.getLogger(__name__)
 
-# Константы API
 OWM_API_URL = "https://api.openweathermap.org/data/2.5/weather"
 OWM_FORECAST_URL = "https://api.openweathermap.org/data/2.5/forecast"
 
-# Часовой пояс и параметры Retry
-# TZ_KYIV вже є в config, але для незалежності модуля можна визначити тут або передавати
-# Якщо TZ_KYIV використовується тільки тут, то залишити. Якщо глобально - краще з config.
-# Для прикладу, використовуємо pytz, як і раніше.
 try:
     TZ_KYIV = pytz.timezone('Europe/Kyiv')
 except pytz.exceptions.UnknownTimeZoneError:
     logger.error("Timezone 'Europe/Kyiv' not found. Using UTC as fallback for Kyiv time.")
-    TZ_KYIV = timezone.utc # Fallback to UTC if 'Europe/Kyiv' is somehow not available
+    TZ_KYIV = timezone.utc
 
 MAX_RETRIES = config.MAX_RETRIES
 INITIAL_DELAY = config.INITIAL_DELAY
@@ -55,15 +48,15 @@ def _weather_cache_key_builder(function_prefix: str, city_name: Optional[str] = 
     elif latitude is not None and longitude is not None:
         return f"weather:{safe_prefix}:coords:{latitude:.4f}:{longitude:.4f}"
     logger.warning(f"_weather_cache_key_builder called with no city_name or coords for prefix {safe_prefix}. Generating unique key.")
-    # Використовуємо dt_datetime для timestamp
     return f"weather:{safe_prefix}:unknown_params_{dt_datetime.now().timestamp()}_{city_name}_{latitude}_{longitude}"
 
 @cached(ttl=config.CACHE_TTL_WEATHER,
-        key_builder=lambda func_ref, bot_obj, city_name_arg, *pos_args, **named_args: _weather_cache_key_builder(
-            "data_city", city_name=city_name_arg
+        key_builder=lambda func, bot_arg, **kwargs: _weather_cache_key_builder(
+            "data_city", 
+            city_name=kwargs.get("city_name") 
         ),
         namespace="weather_service")
-async def get_weather_data(bot: Bot, city_name: str) -> Dict[str, Any]:
+async def get_weather_data(bot: Bot, *, city_name: str) -> Dict[str, Any]:
     safe_city_name = str(city_name).strip() if city_name else ""
     logger.info(f"Service get_weather_data: Called for city_name='{safe_city_name}'")
 
@@ -88,25 +81,16 @@ async def get_weather_data(bot: Bot, city_name: str) -> Dict[str, Any]:
                             data = await response.json(content_type=None)
                             logger.debug(f"OWM Weather API response for '{safe_city_name}': status={response.status}, name in data='{data.get('name')}', raw_data_preview={str(data)[:200]}")
                             
-                            country_code = data.get("sys", {}).get("country")
-                            if country_code and country_code.upper() != "UA":
-                                api_name = data.get('name', safe_city_name)
-                                logger.warning(f"City '{safe_city_name}' (API name: {api_name}) found in country {country_code}, not UA.")
-                                return _generate_error_response(404, f"Місто '{api_name}' знаходиться поза межами України.")
+                            # --- ТИМЧАСОВО ВИМКНЕНО ПЕРЕВІРКУ КРАЇНИ ---
+                            # country_code = data.get("sys", {}).get("country")
+                            # if country_code and country_code.upper() != "UA":
+                            #     api_name = data.get('name', safe_city_name)
+                            #     logger.warning(f"City '{safe_city_name}' (API name: {api_name}) found in country {country_code}, not UA. (Country check currently disabled for testing)")
+                            #     # Замість повернення помилки, просто логуємо і продовжуємо
+                            #     # return _generate_error_response(404, f"Місто '{api_name}' знаходиться поза межами України.")
+                            # --- КІНЕЦЬ ТИМЧАСОВО ВИМКНЕНОЇ ПЕРЕВІРКИ ---
                             
                             if str(data.get("cod")) == "200":
-                                # Якщо потрібна нормалізація назви міста перед поверненням:
-                                # original_api_city_name = data.get("name")
-                                # if original_api_city_name and hasattr(config, 'NOMINATIM_USER_AGENT'): # Перевірка, чи налаштований Nominatim
-                                #     try:
-                                #         from src.utils.city_normalizer import normalize_city_name_ukrainian
-                                #         normalized_name = await normalize_city_name_ukrainian(original_api_city_name)
-                                #         if normalized_name:
-                                #             data["name_display"] = normalized_name # Додаємо поле для відображення
-                                #     except ImportError:
-                                #         logger.warning("City normalizer not found or not configured, using original API name.")
-                                #     except Exception as e_norm:
-                                #         logger.error(f"Error during city name normalization for '{original_api_city_name}': {e_norm}")
                                 return data
                             else:
                                 api_err_message = data.get("message", "Невідома помилка від API OpenWeatherMap")
@@ -155,11 +139,13 @@ async def get_weather_data(bot: Bot, city_name: str) -> Dict[str, Any]:
     return _generate_error_response(500, f"Не вдалося отримати дані для '{safe_city_name}' (неочікуваний вихід з функції).")
 
 @cached(ttl=config.CACHE_TTL_WEATHER,
-        key_builder=lambda func_ref, bot_obj, lat_arg, lon_arg, *pos_args, **named_args: _weather_cache_key_builder(
-            "data_coords", latitude=lat_arg, longitude=lon_arg
+        key_builder=lambda func, bot_arg, **kwargs: _weather_cache_key_builder(
+            "data_coords", 
+            latitude=kwargs.get("latitude"), 
+            longitude=kwargs.get("longitude")
         ),
         namespace="weather_service")
-async def get_weather_data_by_coords(bot: Bot, latitude: float, longitude: float) -> Dict[str, Any]:
+async def get_weather_data_by_coords(bot: Bot, *, latitude: float, longitude: float) -> Dict[str, Any]:
     logger.info(f"Service get_weather_data_by_coords: Called for lat={latitude}, lon={longitude}")
     if not config.WEATHER_API_KEY:
         return _generate_error_response(500, "Ключ OpenWeatherMap API (WEATHER_API_KEY) не налаштовано.")
@@ -180,27 +166,15 @@ async def get_weather_data_by_coords(bot: Bot, latitude: float, longitude: float
                             data = await response.json(content_type=None)
                             logger.debug(f"OWM Weather API response for {location_str}: status={response.status}, name in data='{data.get('name')}', raw_data_preview={str(data)[:200]}")
                             
-                            # Для геолокації, можливо, не варто обмежувати країною, 
-                            # але якщо потрібно, то аналогічна перевірка:
+                            # --- ТИМЧАСОВО ВИМКНЕНО ПЕРЕВІРКУ КРАЇНИ ДЛЯ КООРДИНАТ (якщо ви вирішили її тут не робити) ---
                             # country_code = data.get("sys", {}).get("country")
                             # if country_code and country_code.upper() != "UA":
                             #     api_name = data.get('name', location_str)
-                            #     logger.warning(f"Coords {location_str} (API name: {api_name}) resolved to country {country_code}, not UA.")
-                            #     return _generate_error_response(404, f"Локація за координатами знаходиться поза межами України ({api_name}).")
+                            #     logger.warning(f"Coords {location_str} (API name: {api_name}) resolved to country {country_code}, not UA. (Country check disabled for coords)")
+                            #     # return _generate_error_response(404, f"Локація за координатами ({api_name}) знаходиться поза межами України.")
+                            # --- КІНЕЦЬ ТИМЧАСОВО ВИМКНЕНОЇ ПЕРЕВІРКИ ---
 
                             if str(data.get("cod")) == "200":
-                                # Нормалізація назви міста, отриманого за координатами
-                                # original_api_city_name = data.get("name")
-                                # if original_api_city_name and hasattr(config, 'NOMINATIM_USER_AGENT'):
-                                #     try:
-                                #         from src.utils.city_normalizer import normalize_city_name_ukrainian
-                                #         normalized_name = await normalize_city_name_ukrainian(original_api_city_name)
-                                #         if normalized_name:
-                                #             data["name_display"] = normalized_name
-                                #     except ImportError:
-                                #         logger.warning("City normalizer not found for coords, using original API name.")
-                                #     except Exception as e_norm_coords:
-                                #         logger.error(f"Error during city name normalization for coords '{original_api_city_name}': {e_norm_coords}")
                                 return data
                             else:
                                 api_err_message = data.get("message", "Невідома помилка від API OpenWeatherMap")
@@ -211,7 +185,6 @@ async def get_weather_data_by_coords(bot: Bot, latitude: float, longitude: float
                             logger.error(f"Attempt {attempt + 1}: Failed to decode JSON from OWM for {location_str}. Response text: {response_data_text[:500]}")
                             last_exception = Exception("Невірний формат JSON відповіді від OpenWeatherMap")
                             return _generate_error_response(500, "Невірний формат JSON відповіді від OpenWeatherMap.")
-                    # ... (решта обробки помилок HTTP як у get_weather_data) ...
                     elif response.status == 401:
                         logger.error(f"Attempt {attempt + 1}: Invalid OWM API key (401) for {location_str}.")
                         return _generate_error_response(401, "Невірний ключ API OpenWeatherMap.")
@@ -246,12 +219,13 @@ async def get_weather_data_by_coords(bot: Bot, latitude: float, longitude: float
             return _generate_error_response(final_error_code, error_message)
     return _generate_error_response(500, f"Не вдалося отримати дані для {location_str} (неочікуваний вихід з функції).")
 
+
 @cached(ttl=config.CACHE_TTL_WEATHER,
-        key_builder=lambda func_ref, bot_obj, city_name_arg, *pos_args, **named_args: _weather_cache_key_builder(
-            "forecast_city", city_name=city_name_arg
+        key_builder=lambda func, bot_arg, **kwargs: _weather_cache_key_builder(
+            "forecast_city", city_name=kwargs.get("city_name")
         ),
         namespace="weather_service")
-async def get_5day_forecast(bot: Bot, city_name: str) -> Dict[str, Any]:
+async def get_5day_forecast(bot: Bot, *, city_name: str) -> Dict[str, Any]:
     safe_city_name = str(city_name).strip() if city_name else ""
     logger.info(f"Service get_5day_forecast: Called for city_name='{safe_city_name}'")
 
@@ -277,26 +251,15 @@ async def get_5day_forecast(bot: Bot, city_name: str) -> Dict[str, Any]:
                             city_name_from_forecast_api = data.get("city", {}).get("name", "N/A")
                             logger.debug(f"OWM Forecast API response for '{safe_city_name}': status={response.status}, city name in data='{city_name_from_forecast_api}', raw_data_preview={str(data)[:200]}")
                             
-                            # Перевірка країни для прогнозу
-                            country_code_forecast = data.get("city", {}).get("country")
-                            if country_code_forecast and country_code_forecast.upper() != "UA":
-                                api_name = data.get("city", {}).get("name", safe_city_name)
-                                logger.warning(f"Forecast for city '{safe_city_name}' (API name: {api_name}) is for country {country_code_forecast}, not UA.")
-                                return _generate_error_response(404, f"Прогноз для міста '{api_name}' доступний, але воно поза межами України.", service_name="OpenWeatherMap Forecast")
+                            # --- ТИМЧАСОВО ВИМКНЕНО ПЕРЕВІРКУ КРАЇНИ ---
+                            # country_code_forecast = data.get("city", {}).get("country")
+                            # if country_code_forecast and country_code_forecast.upper() != "UA":
+                            #     api_name = data.get("city", {}).get("name", safe_city_name)
+                            #     logger.warning(f"Forecast for city '{safe_city_name}' (API name: {api_name}) is for country {country_code_forecast}, not UA. (Country check disabled)")
+                            #     # return _generate_error_response(404, f"Прогноз для міста '{api_name}' доступний, але воно поза межами України.", service_name="OpenWeatherMap Forecast")
+                            # --- КІНЕЦЬ ТИМЧАСОВО ВИМКНЕНОЇ ПЕРЕВІРКИ ---
 
                             if str(data.get("cod")) == "200":
-                                # Нормалізація назви міста в прогнозі
-                                # original_api_city_name = data.get("city", {}).get("name")
-                                # if original_api_city_name and hasattr(config, 'NOMINATIM_USER_AGENT'):
-                                #     try:
-                                #         from src.utils.city_normalizer import normalize_city_name_ukrainian
-                                #         normalized_name = await normalize_city_name_ukrainian(original_api_city_name)
-                                #         if normalized_name and "city" in data: # Переконуємося, що "city" існує
-                                #             data["city"]["name_display"] = normalized_name
-                                #     except ImportError:
-                                #         logger.warning("City normalizer not found for forecast, using original API name.")
-                                #     except Exception as e_norm_forecast:
-                                #         logger.error(f"Error during city name normalization for forecast '{original_api_city_name}': {e_norm_forecast}")
                                 return data
                             else:
                                 api_err_message = data.get("message", "Невідома помилка від API прогнозу OpenWeatherMap")
@@ -307,7 +270,6 @@ async def get_5day_forecast(bot: Bot, city_name: str) -> Dict[str, Any]:
                             logger.error(f"Attempt {attempt + 1}: Failed to decode JSON from OWM Forecast for '{safe_city_name}'. Response text: {response_data_text[:500]}")
                             last_exception = Exception("Невірний формат JSON відповіді від OWM Forecast")
                             return _generate_error_response(500, "Невірний формат JSON відповіді від OWM Forecast.", service_name="OpenWeatherMap Forecast")
-                    # ... (решта обробки помилок HTTP як у get_weather_data) ...
                     elif response.status == 404:
                         logger.warning(f"Attempt {attempt + 1}: City '{safe_city_name}' not found by OWM Forecast (404).")
                         return _generate_error_response(404, f"Місто '{safe_city_name}' не знайдено для прогнозу.", service_name="OpenWeatherMap Forecast")
@@ -360,15 +322,13 @@ def format_weather_message(data: Dict[str, Any], city_display_name_for_user: str
         clouds = data.get("clouds", {})
         sys_info = data.get("sys", {})
         
-        # Використовуємо "name_display" якщо воно є (після нормалізації), інакше "name"
         api_city_name = data.get("name_display") or data.get("name")
 
         header_text: str
         if is_coords_request:
             if api_city_name:
                 header_text = f"<b>Погода (м. {api_city_name}, за координатами)</b>"
-            else: # Якщо API не повернуло ім'я для координат, використовуємо те, що ввів користувач (якщо це був city_input)
-                  # або загальний текст. city_display_name_for_user вже має містити це.
+            else: 
                 header_text = f"<b>Погода за вашими координатами ({city_display_name_for_user})</b>"
         else:
             header_text = f"<b>Погода в: {api_city_name or city_display_name_for_user}</b>"
@@ -433,17 +393,15 @@ def format_forecast_message(data: Dict[str, Any], city_display_name_for_user: st
             return f"😔 Не вдалося отримати прогноз для <b>{city_display_name_for_user}</b>.\n<i>Причина: {error_message} (Код: {error_code})</i>"
 
         api_city_info = data.get("city", {})
-        # Використовуємо "name_display" якщо є, інакше "name"
         api_city_name_in_forecast = api_city_info.get("name_display") or api_city_info.get("name")
         
         header_city_name = city_display_name_for_user
-        if "координатами" in city_display_name_for_user.lower():
-             if api_city_name_in_forecast:
-                 header_city_name = f"м. {api_city_name_in_forecast} (за координатами)"
+        if "координатами" in city_display_name_for_user.lower() and api_city_name_in_forecast:
+            header_city_name = f"м. {api_city_name_in_forecast} (за координатами)"
         elif api_city_name_in_forecast:
             header_city_name = api_city_name_in_forecast.capitalize()
 
-        message_lines = [f"<b>Прогноз погоди для: {header_city_name} на найближчі дні:</b>\n"] # Змінено заголовок
+        message_lines = [f"<b>Прогноз погоди для: {header_city_name} на найближчі дні:</b>\n"]
         forecast_list = data.get("list", [])
         
         if not forecast_list:
@@ -488,10 +446,9 @@ def format_forecast_message(data: Dict[str, Any], city_display_name_for_user: st
 
         sorted_dates_keys = sorted(daily_forecasts.keys(), key=lambda d_key: daily_forecasts[d_key]["dt_obj_kyiv"])
         
-        # Обмежуємо вивід до 5 унікальних днів, якщо їх більше
         days_to_show = 0
         for date_key_str in sorted_dates_keys:
-            if days_to_show >= 5: # Показуємо не більше 5 днів
+            if days_to_show >= 5: 
                 break
             forecast_details = daily_forecasts[date_key_str]
             message_lines.append(
@@ -505,17 +462,11 @@ def format_forecast_message(data: Dict[str, Any], city_display_name_for_user: st
         logger.exception(f"Error formatting forecast message for '{city_display_name_for_user}': {e}. Data: {str(data)[:500]}", exc_info=True)
         return f"😥 Вибачте, сталася помилка при обробці даних прогнозу для <b>{city_display_name_for_user}</b>."
 
-# --- Нова функція для прогнозу на завтра ---
 def format_tomorrow_forecast_message(
-    forecast_api_response: Dict[str, Any], # Це відповідь від get_5day_forecast
+    forecast_api_response: Dict[str, Any],
     city_display_name_for_user: str
 ) -> str:
-    """
-    Форматує детальний прогноз погоди на завтрашній день.
-    Використовує дані, отримані від get_5day_forecast.
-    """
     try:
-        # Перевірка на загальну помилку API у вхідних даних
         if "error_source" in forecast_api_response or str(forecast_api_response.get("cod")) != "200":
             error_message = forecast_api_response.get("message", "Невідома помилка API прогнозу.")
             error_code = forecast_api_response.get("cod", "N/A")
@@ -524,22 +475,18 @@ def format_tomorrow_forecast_message(
 
         forecast_list_all_days = forecast_api_response.get("list", [])
         api_city_info = forecast_api_response.get("city", {})
-        # Використовуємо "name_display" якщо є, інакше "name"
         api_city_name = api_city_info.get("name_display") or api_city_info.get("name")
         
-        # Визначаємо заголовок для міста
         header_city_name = city_display_name_for_user
         if "координатами" in city_display_name_for_user.lower() and api_city_name:
             header_city_name = f"м. {api_city_name} (за координатами)"
         elif api_city_name:
             header_city_name = api_city_name.capitalize()
 
-
         if not forecast_list_all_days:
             logger.warning(f"Tomorrow's forecast: Forecast list is empty for '{header_city_name}'.")
             return f"😥 Детальний прогноз на завтра для <b>{header_city_name}</b> відсутній (немає даних)."
 
-        # Визначаємо завтрашню дату
         now_in_kyiv = dt_datetime.now(TZ_KYIV)
         tomorrow_date_kyiv = (now_in_kyiv + timedelta(days=1)).date()
         
@@ -550,9 +497,7 @@ def format_tomorrow_forecast_message(
             dt_txt = item.get("dt_txt")
             if not dt_txt: continue
             try:
-                # Дата/час в UTC від API
                 dt_obj_utc = dt_datetime.strptime(dt_txt, '%Y-%m-%d %H:%M:%S')
-                # Конвертуємо в Київський час
                 dt_obj_kyiv = dt_obj_utc.replace(tzinfo=timezone.utc).astimezone(TZ_KYIV)
                 if dt_obj_kyiv.date() == tomorrow_date_kyiv:
                     tomorrow_hourly_forecasts.append(item)
@@ -564,18 +509,15 @@ def format_tomorrow_forecast_message(
             logger.warning(f"Tomorrow's forecast: No forecast items found for {tomorrow_date_kyiv} for '{header_city_name}'.")
             return f"😥 Детальний прогноз на завтра для <b>{header_city_name}</b> відсутній (немає даних на завтра)."
 
-        # Формуємо повідомлення
         day_name_en = tomorrow_date_kyiv.strftime('%A')
         day_name_uk = DAYS_OF_WEEK_UK.get(day_name_en, day_name_en)
         date_str_formatted = tomorrow_date_kyiv.strftime(f'%d.%m.%Y ({day_name_uk})')
 
         message_lines = [f"☀️ <b>Прогноз на завтра, {date_str_formatted}, для: {header_city_name}</b>\n"]
         
-        # Збираємо дані для агрегації (мін/макс температура, переважаючий опис)
         min_temp_tomorrow = float('inf')
         max_temp_tomorrow = float('-inf')
-        precip_total_mm = 0.0
-        condition_counts: Dict[str, int] = {} # Для підрахунку описів погоди
+        condition_counts: Dict[str, int] = {}
         
         hourly_details_lines = ["\n<b>Погодинно:</b>"]
 
@@ -596,18 +538,11 @@ def format_tomorrow_forecast_message(
                 min_temp_tomorrow = min(min_temp_tomorrow, temp)
                 max_temp_tomorrow = max(max_temp_tomorrow, temp)
             
-            precip_total_mm += item.get("pop", 0.0) * (item.get("rain", {}).get("3h", 0.0) if item.get("rain") else 0.0) # Приблизно
-            # Або якщо є прямі дані про опади:
-            # precip_total_mm += item.get("rain", {}).get("3h", 0.0) if item.get("rain") else 0.0
-            # precip_total_mm += item.get("snow", {}).get("3h", 0.0) if item.get("snow") else 0.0
-
-
             if description:
                 condition_counts[description.capitalize()] = condition_counts.get(description.capitalize(), 0) + 1
             
             hourly_details_lines.append(f"  <b>{time_str}</b>: {temp:.0f}°C, {description.capitalize()} {emoji}")
 
-        # Загальний опис на день
         if min_temp_tomorrow != float('inf'):
              message_lines.append(f"🌡️ Температура: від {min_temp_tomorrow:.0f}°C до {max_temp_tomorrow:.0f}°C")
         
@@ -615,9 +550,6 @@ def format_tomorrow_forecast_message(
             dominant_condition = max(condition_counts, key=condition_counts.get)
             message_lines.append(f"📝 Переважно: {dominant_condition}")
         
-        # if precip_total_mm > 0: # Якщо є дані про опади
-        #     message_lines.append(f"💧 Опади: очікується ~{precip_total_mm:.1f} мм")
-
         message_lines.extend(hourly_details_lines)
         message_lines.append("\n<tg-spoiler>Прогноз може уточнюватися.</tg-spoiler>")
         return "\n".join(message_lines)
@@ -625,5 +557,3 @@ def format_tomorrow_forecast_message(
     except Exception as e:
         logger.exception(f"Error formatting tomorrow's detailed forecast for '{city_display_name_for_user}': {e}", exc_info=True)
         return f"😥 Вибачте, сталася помилка при обробці детального прогнозу на завтра для <b>{city_display_name_for_user}</b>."
-
-# --- Функція для генерації помилок ---

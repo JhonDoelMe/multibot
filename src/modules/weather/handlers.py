@@ -1,7 +1,7 @@
 # src/modules/weather/handlers.py
 
 import logging
-import re # Для валідації вводу міста
+import re 
 from typing import Union, Optional, Dict, Any
 
 from aiogram import Bot, Router, F
@@ -10,23 +10,21 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, CallbackQuery
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.db.models import User # Модель User для роботи з БД
+from src.db.models import User
 from .keyboard import (
     get_weather_actions_keyboard, CALLBACK_WEATHER_OTHER_CITY, CALLBACK_WEATHER_REFRESH,
     get_weather_enter_city_back_keyboard, CALLBACK_WEATHER_BACK_TO_MAIN,
     get_save_city_keyboard, CALLBACK_WEATHER_SAVE_CITY_YES, CALLBACK_WEATHER_SAVE_CITY_NO,
     CALLBACK_WEATHER_FORECAST_5D, CALLBACK_WEATHER_SHOW_CURRENT, get_forecast_keyboard,
-    CALLBACK_WEATHER_FORECAST_TOMORROW # Новий колбек
+    CALLBACK_WEATHER_FORECAST_TOMORROW
 )
 from .service import (
     get_weather_data, format_weather_message,
     get_5day_forecast, format_forecast_message,
     get_weather_data_by_coords,
-    format_tomorrow_forecast_message # Новий форматувальник
+    format_tomorrow_forecast_message
 )
 from src.handlers.utils import show_main_menu_message
-# Якщо буде використовуватися нормалізатор імен міст:
-# from src.utils.city_normalizer import normalize_city_name_ukrainian # Приклад
 
 logger = logging.getLogger(__name__)
 router = Router(name="weather-module")
@@ -65,23 +63,20 @@ async def _get_and_show_weather(
         action_text = "🔍 Отримую дані про погоду..."
         if isinstance(target, CallbackQuery):
             status_message = await message_to_edit_or_answer.edit_text(action_text)
-        else: # Message (текстове введення або геолокація)
+        else: 
             status_message = await target.answer(action_text)
     except Exception as e:
         logger.warning(f"Could not send/edit 'loading' status message for weather, user {user_id}: {e}")
 
     weather_api_response: Dict[str, Any]
     is_coords_request_flag = False
-    # Визначаємо, яке місто/локацію показувати користувачеві у випадку помилки API
-    # або якщо API не поверне назву
     initial_display_location = city_input if city_input else ("ваші координати" if coords else "вказана локація")
-
 
     if coords:
         is_coords_request_flag = True
-        weather_api_response = await get_weather_data_by_coords(bot, coords['lat'], coords['lon'])
+        weather_api_response = await get_weather_data_by_coords(bot, latitude=coords['lat'], longitude=coords['lon'])
     elif city_input:
-        weather_api_response = await get_weather_data(bot, city_input)
+        weather_api_response = await get_weather_data(bot, city_name=city_input)
     else:
         logger.error(f"No city_input or coords provided for user {user_id} in _get_and_show_weather.")
         error_text = "Помилка: Не вказано місто або координати для запиту погоди."
@@ -94,34 +89,13 @@ async def _get_and_show_weather(
         return
 
     final_target_message = status_message if status_message else message_to_edit_or_answer
-
-    # Обробка відповіді API (успіх або помилка, включаючи перевірку країни)
-    # format_weather_message тепер сам обробляє структуру помилки від сервісу
-    # і повертає відповідне повідомлення.
-    # `initial_display_location` використовується, якщо API не повернуло назву або була помилка до отримання назви.
     
-    # Назва міста, яку повернуло API (якщо успішно)
     api_city_name_raw = weather_api_response.get("name") if str(weather_api_response.get("cod")) == "200" else None
-    
-    # Тут можна додати виклик нормалізатора, якщо він реалізований
-    # normalized_api_city_name = None
-    # if api_city_name_raw and hasattr(config, 'NOMINATIM_USER_AGENT'): # Приклад умови для виклику
-    #     try:
-    #         from src.utils.city_normalizer import normalize_city_name_ukrainian
-    #         normalized_api_city_name = await normalize_city_name_ukrainian(api_city_name_raw)
-    #     except ImportError:
-    #         logger.warning("City normalizer not found, using raw API name.")
-    #     except Exception as e_norm:
-    #         logger.error(f"Error during city name normalization for '{api_city_name_raw}': {e_norm}")
-    
-    # Використовуємо нормалізовану назву, якщо є, інакше ту, що від API, інакше ту, що ввів користувач
-    # city_display_name_for_message = normalized_api_city_name or api_city_name_raw or initial_display_location
-    city_display_name_for_message = api_city_name_raw or initial_display_location # Поки без нормалізатора
+    city_display_name_for_message = api_city_name_raw or initial_display_location
 
     weather_message_text = format_weather_message(weather_api_response, city_display_name_for_message, is_coords_request_flag)
 
     if weather_api_response.get("status") == "error" or str(weather_api_response.get("cod")) != "200":
-        # Помилка від API або сервісу (включаючи "поза Україною")
         reply_markup = get_weather_enter_city_back_keyboard()
         try:
             if status_message: await final_target_message.edit_text(weather_message_text, reply_markup=reply_markup)
@@ -132,19 +106,13 @@ async def _get_and_show_weather(
         logger.warning(f"API error/country restriction for weather request {request_details_log} for user {user_id}. Response: {weather_api_response}")
         return
 
-    # Успішна відповідь від API, місто в Україні
-    # Тепер api_city_name_raw - це підтверджена API назва міста в Україні (або для координат)
-    # city_to_save_confirmed - це назва, яку ми запропонуємо зберегти.
-    # Для геолокації це буде api_city_name_raw.
-    # Для текстового вводу це також буде api_city_name_raw (бо API підтвердило місто).
-    city_to_save_confirmed = api_city_name_raw # або normalized_api_city_name, якщо є нормалізація
-
+    city_to_save_confirmed = api_city_name_raw
     logger.info(f"User {user_id}: API confirmed city='{api_city_name_raw}', to_save_confirmed='{city_to_save_confirmed}'")
 
     fsm_update_data = {
         "current_shown_city_api": api_city_name_raw if api_city_name_raw else (f"{coords['lat']},{coords['lon']}" if coords else city_input),
-        "city_display_name_user": city_display_name_for_message, # Те, що показали користувачу
-        "city_to_save_confirmed": city_to_save_confirmed, # Те, що будемо зберігати
+        "city_display_name_user": city_display_name_for_message,
+        "city_to_save_confirmed": city_to_save_confirmed,
         "is_coords_request_fsm": is_coords_request_flag
     }
     await state.update_data(**fsm_update_data)
@@ -152,16 +120,18 @@ async def _get_and_show_weather(
 
     ask_to_save = False
     db_user = await session.get(User, user_id)
-    preferred_city_from_db = db_user.preferred_city if db_user else None
-
-    if city_to_save_confirmed and \
-       (not preferred_city_from_db or preferred_city_from_db.lower() != city_to_save_confirmed.lower()):
-        ask_to_save = True
+    if not db_user: # Перевірка, чи користувач існує, перед тим як намагатися зберегти місто
+        logger.error(f"User {user_id} not found in DB before asking to save city. This should not happen if /start was processed.")
+        # Можна просто не пропонувати зберегти або показати помилку
+    else:
+        preferred_city_from_db = db_user.preferred_city
+        if city_to_save_confirmed and \
+           (not preferred_city_from_db or preferred_city_from_db.lower() != city_to_save_confirmed.lower()):
+            ask_to_save = True
 
     reply_markup = None
     if ask_to_save:
         save_prompt_city_name = city_to_save_confirmed.capitalize()
-        # Додаємо запит на збереження до основного повідомлення про погоду
         weather_message_text_with_prompt = weather_message_text + \
             f"\n\n💾 Зберегти <b>{save_prompt_city_name}</b> як основне місто?"
         reply_markup = get_save_city_keyboard()
@@ -215,7 +185,8 @@ async def weather_entry_point(
         await _get_and_show_weather(bot, target, state, session, city_input=preferred_city)
     else:
         logger.info(f"User {user_id} has no preferred city. Asking for input.")
-        text = "🌍 Будь ласка, введіть назву міста українською мовою або надішліть геолокацію:" # Оновлено текст
+        # Тимчасово прибираємо вимогу української мови з підказки
+        text = "🌍 Будь ласка, введіть назву міста або надішліть геолокацію:"
         reply_markup = get_weather_enter_city_back_keyboard()
         try:
             if isinstance(target, CallbackQuery):
@@ -243,13 +214,12 @@ async def handle_location_when_waiting(message: Message, state: FSMContext, sess
         user_id = message.from_user.id
         logger.info(f"Weather module: handle_location_when_waiting for user {user_id}: lat={lat}, lon={lon}")
         await _get_and_show_weather(bot, message, state, session, coords={"lat": lat, "lon": lon})
-    else: # Малоймовірно, якщо спрацював F.location
+    else:
         logger.warning(f"User {message.from_user.id}: handle_location_when_waiting called without message.location.")
         try: await message.reply("Не вдалося отримати вашу геолокацію. Спробуйте ще раз.")
         except Exception as e: logger.error(f"Error sending 'cannot get location' message: {e}")
 
 async def process_main_geolocation_button(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
-    # Викликається з common_handlers.handle_any_geolocation
     if message.location:
         lat = message.location.latitude
         lon = message.location.longitude
@@ -273,28 +243,32 @@ async def handle_city_input(message: Message, state: FSMContext, session: AsyncS
         except Exception as e: logger.error(f"Error sending empty city input message: {e}")
         return
 
-    # Перевірка на українську мову введення
-    if not re.match(r"^[А-Яа-яЁёІіЇїЄєҐґ\s\-\']+$", user_city_input):
-        try:
-            await message.answer(
-                "😔 Будь ласка, введіть назву міста українською мовою, використовуючи лише українські літери, пробіл, дефіс або апостроф.",
-                reply_markup=get_weather_enter_city_back_keyboard()
-            )
-        except Exception as e: logger.error(f"Error sending 'use Ukrainian input' message: {e}")
-        return
+    # --- ТИМЧАСОВО ВИМКНЕНО ПЕРЕВІРКУ НА УКРАЇНСЬКУ МОВУ ВВЕДЕННЯ ---
+    # if not re.match(r"^[А-Яа-яЁёІіЇїЄєҐґ\s\-\']+$", user_city_input):
+    #     try:
+    #         await message.answer(
+    #             "😔 Будь ласка, введіть назву міста українською мовою, використовуючи лише українські літери, пробіл, дефіс або апостроф.",
+    #             reply_markup=get_weather_enter_city_back_keyboard()
+    #         )
+    #     except Exception as e: logger.error(f"Error sending 'use Ukrainian input' message: {e}")
+    #     return
+    # --- КІНЕЦЬ ТИМЧАСОВО ВИМКНЕНОЇ ПЕРЕВІРКИ ---
 
+    # Загальна перевірка на довжину та базові символи (можна залишити або спростити)
     if len(user_city_input) > 100:
         try: await message.answer("😔 Назва міста занадто довга (максимум 100 символів).", reply_markup=get_weather_enter_city_back_keyboard())
         except Exception as e: logger.error(f"Error sending city name too long message: {e}")
         return
+    # Цей re.match дозволяє латиницю, цифри тощо, що зараз нам підходить для тестування
+    if not re.match(r"^[A-Za-zА-Яа-яЁёІіЇїЄєҐґ\s\-\.\'\d]+$", user_city_input):
+        try: await message.answer("😔 Назва міста містить неприпустимі символи. Спробуйте ще раз.", reply_markup=get_weather_enter_city_back_keyboard())
+        except Exception as e: logger.error(f"Error sending invalid city name chars message: {e}")
+        return
         
     await _get_and_show_weather(bot, message, state, session, city_input=user_city_input)
 
-# --- Обробники кнопок дій після показу погоди ---
-
 @router.callback_query(F.data == CALLBACK_WEATHER_OTHER_CITY, WeatherStates.showing_weather)
 async def handle_action_other_city(callback: CallbackQuery, state: FSMContext):
-    # ... (код залишається схожим, але переконуємося, що відповідь на колбек коректна) ...
     user_id = callback.from_user.id
     logger.info(f"User {user_id} requested OTHER city from showing_weather state.")
     answered_callback = False
@@ -303,12 +277,14 @@ async def handle_action_other_city(callback: CallbackQuery, state: FSMContext):
         answered_callback = True
     except Exception as e: logger.warning(f"Could not answer callback in handle_action_other_city: {e}")
     
+    # Тимчасово прибираємо вимогу української мови з підказки
+    text_prompt = "🌍 Введіть назву іншого міста:"
     try:
-        await callback.message.edit_text("🌍 Введіть назву іншого міста українською мовою:", reply_markup=get_weather_enter_city_back_keyboard())
+        await callback.message.edit_text(text_prompt, reply_markup=get_weather_enter_city_back_keyboard())
     except Exception as e_edit:
         logger.error(f"Failed to edit message for 'other city' input: {e_edit}")
         try: 
-            await callback.message.answer("🌍 Введіть назву іншого міста українською мовою:", reply_markup=get_weather_enter_city_back_keyboard())
+            await callback.message.answer(text_prompt, reply_markup=get_weather_enter_city_back_keyboard())
         except Exception as e_ans: logger.error(f"Failed to send new message for 'other city' input: {e_ans}")
     
     await state.set_state(WeatherStates.waiting_for_city)
@@ -318,12 +294,11 @@ async def handle_action_other_city(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == CALLBACK_WEATHER_REFRESH, WeatherStates.showing_weather)
 async def handle_action_refresh(callback: CallbackQuery, state: FSMContext, session: AsyncSession, bot: Bot):
-    # ... (код залишається схожим, але використовуємо оновлені ключі FSM) ...
     user_id = callback.from_user.id
     user_fsm_data = await state.get_data()
     logger.info(f"User {user_id} requested REFRESH. FSM data: {user_fsm_data}")
     
-    api_request_location = user_fsm_data.get("current_shown_city_api") # Це може бути місто або "lat,lon"
+    api_request_location = user_fsm_data.get("current_shown_city_api")
     is_coords = user_fsm_data.get("is_coords_request_fsm", False)
 
     answered_callback = False
@@ -340,22 +315,22 @@ async def handle_action_refresh(callback: CallbackQuery, state: FSMContext, sess
             try:
                 lat_str, lon_str = api_request_location.split(',')
                 coords_for_refresh = {"lat": float(lat_str), "lon": float(lon_str)}
-            except ValueError: api_request_location = None # Помилка парсингу
+            except ValueError: api_request_location = None 
         elif not is_coords:
             city_for_refresh = api_request_location
-        else: api_request_location = None # Неконгруентні дані
-
+        else: api_request_location = None 
+            
         if coords_for_refresh:
             await _get_and_show_weather(bot, callback, state, session, coords=coords_for_refresh)
         elif city_for_refresh:
             await _get_and_show_weather(bot, callback, state, session, city_input=city_for_refresh)
-        else: # Якщо api_request_location було скинуто
+        else: 
             api_request_location = None 
             
-    if not api_request_location: # Якщо не вдалося визначити місто/координати з FSM
+    if not api_request_location: 
         logger.warning(f"User {user_id}: No valid location found in FSM for refresh. Asking to input city.")
-        # ... (код для запиту міста, як у попередній версії) ...
-        error_text = "😔 Не вдалося визначити дані для оновлення. Будь ласка, введіть місто українською мовою:"
+        # Тимчасово прибираємо вимогу української мови з підказки
+        error_text = "😔 Не вдалося визначити дані для оновлення. Будь ласка, введіть місто:"
         reply_markup = get_weather_enter_city_back_keyboard()
         try:
             await callback.message.edit_text(error_text, reply_markup=reply_markup)
@@ -369,10 +344,8 @@ async def handle_action_refresh(callback: CallbackQuery, state: FSMContext, sess
         try: await callback.answer()
         except: pass
 
-# --- Обробники для збереження міста ---
 @router.callback_query(F.data == CALLBACK_WEATHER_SAVE_CITY_YES, WeatherStates.waiting_for_save_decision)
 async def handle_save_city_yes(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
-    # ... (код залишається схожим, але використовуємо "city_to_save_confirmed") ...
     user_id = callback.from_user.id
     user_fsm_data = await state.get_data()
     logger.info(f"User {user_id} chose YES to save city. FSM data: {user_fsm_data}")
@@ -401,16 +374,16 @@ async def handle_save_city_yes(callback: CallbackQuery, state: FSMContext, sessi
                 session.add(db_user)
                 logger.info(f"User {user_id}: Preferred city set to '{city_to_actually_save_in_db}' (was '{old_preferred_city}').")
                 final_text = f"✅ Місто <b>{city_name_user_saw_in_prompt or city_to_actually_save_in_db}</b> збережено як основне."
-                await state.update_data(preferred_city_from_db_fsm=city_to_actually_save_in_db) # Оновлюємо для консистентності
+                await state.update_data(preferred_city_from_db_fsm=city_to_actually_save_in_db)
             except Exception as e_db:
                 logger.exception(f"User {user_id}: DB error while saving preferred city '{city_to_actually_save_in_db}': {e_db}", exc_info=True)
                 await session.rollback()
                 final_text = "😥 Виникла помилка під час збереження міста."
-        else:
-            logger.error(f"User {user_id} not found in DB during save city operation.")
-            final_text = "Помилка: не вдалося знайти ваші дані для збереження міста."
+        else: # Цей блок тепер досяжний, якщо _get_and_show_weather не знайшов користувача
+            logger.error(f"User {user_id} not found in DB during save city operation (handle_save_city_yes).")
+            final_text = "Помилка: не вдалося знайти ваші дані для збереження міста. Спробуйте /start."
     
-    await state.set_state(WeatherStates.showing_weather) # Завжди переходимо в стан показу погоди
+    await state.set_state(WeatherStates.showing_weather)
     try:
         await callback.message.edit_text(final_text, reply_markup=final_markup)
     except Exception as e_edit:
@@ -425,23 +398,14 @@ async def handle_save_city_yes(callback: CallbackQuery, state: FSMContext, sessi
 
 @router.callback_query(F.data == CALLBACK_WEATHER_SAVE_CITY_NO, WeatherStates.waiting_for_save_decision)
 async def handle_save_city_no(callback: CallbackQuery, state: FSMContext):
-    # ... (код залишається схожим) ...
     user_id = callback.from_user.id
     user_fsm_data = await state.get_data()
     logger.info(f"User {user_id} chose NOT to save city. FSM data: {user_fsm_data}")
     
     city_display_name_from_prompt = user_fsm_data.get("city_display_name_user", "поточне місто")
-    
     original_message_text = callback.message.text
-    # Видаляємо частину із запитом на збереження, якщо вона є
-    prompt_to_remove = f"\n\n💾 Зберегти <b>{city_display_name_from_prompt.capitalize()}</b> як основне місто?" # Приблизно
-    # Більш надійний спосіб - зберігати вихідний текст погоди в FSM перед додаванням запиту
-    # Або просто формувати текст заново, якщо це простіше
-    
-    # Простий варіант:
-    text_after_no_save = original_message_text.split("\n\n💾 Зберегти", 1)[0] # Беремо частину до запиту
+    text_after_no_save = original_message_text.split("\n\n💾 Зберегти", 1)[0]
     text_after_no_save += f"\n\n(Місто <b>{city_display_name_from_prompt}</b> не було збережено)"
-
 
     answered_callback = False
     try:
@@ -463,10 +427,9 @@ async def handle_save_city_no(callback: CallbackQuery, state: FSMContext):
         try: await callback.answer()
         except: pass
 
-# --- Обробники для прогнозу ---
 
 @router.callback_query(F.data == CALLBACK_WEATHER_FORECAST_5D, WeatherStates.showing_weather)
-async def handle_forecast_request(callback: CallbackQuery, state: FSMContext, bot: Bot): # session тут не потрібен
+async def handle_forecast_request(callback: CallbackQuery, state: FSMContext, bot: Bot):
     user_id = callback.from_user.id
     user_fsm_data = await state.get_data()
     logger.info(f"User {user_id} requested 5-day FORECAST. FSM data: {user_fsm_data}")
@@ -496,9 +459,9 @@ async def handle_forecast_request(callback: CallbackQuery, state: FSMContext, bo
         logger.warning(f"Failed to edit message for 5d forecast status: {e_edit_status}")
 
     final_target_message = status_message if status_message else callback.message
-    forecast_api_response = await get_5day_forecast(bot, city_name_for_api_request)
+    full_forecast_api_response = await get_5day_forecast(bot, city_name=city_name_for_api_request) 
     
-    message_text = format_forecast_message(forecast_api_response, display_name_for_forecast_header)
+    message_text = format_forecast_message(full_forecast_api_response, display_name_for_forecast_header)
     reply_markup = get_forecast_keyboard()
 
     try:
@@ -513,7 +476,6 @@ async def handle_forecast_request(callback: CallbackQuery, state: FSMContext, bo
         try: await callback.answer()
         except: pass
 
-# --- НОВИЙ ОБРОБНИК для прогнозу на завтра ---
 @router.callback_query(F.data == CALLBACK_WEATHER_FORECAST_TOMORROW, WeatherStates.showing_weather)
 async def handle_tomorrow_forecast_request(callback: CallbackQuery, state: FSMContext, bot: Bot):
     user_id = callback.from_user.id
@@ -521,7 +483,6 @@ async def handle_tomorrow_forecast_request(callback: CallbackQuery, state: FSMCo
     logger.info(f"User {user_id} requested TOMORROW'S FORECAST. FSM data: {user_fsm_data}")
 
     city_name_for_api_request = user_fsm_data.get("current_shown_city_api")
-    # Для заголовка прогнозу використовуємо "city_display_name_user", яке вже мало бути нормалізоване або взяте з API
     display_name_for_header = user_fsm_data.get("city_display_name_user", city_name_for_api_request)
     
     answered_callback = False
@@ -546,20 +507,15 @@ async def handle_tomorrow_forecast_request(callback: CallbackQuery, state: FSMCo
         logger.warning(f"Failed to edit message for tomorrow's forecast status: {e_edit_status}")
 
     final_target_message = status_message if status_message else callback.message
+    full_forecast_api_response = await get_5day_forecast(bot, city_name=city_name_for_api_request) 
     
-    # Отримуємо 5-денний прогноз, щоб з нього витягти завтрашній
-    # Важливо: get_5day_forecast вже має перевіряти країну і повертати помилку, якщо не Україна
-    full_forecast_api_response = await get_5day_forecast(bot, city_name_for_api_request) 
-    
-    # format_tomorrow_forecast_message обробляє відповідь (включаючи можливі помилки від get_5day_forecast)
     message_text = format_tomorrow_forecast_message(full_forecast_api_response, display_name_for_header)
-    reply_markup = get_forecast_keyboard() # Та сама клавіатура "Назад до поточної погоди"
+    reply_markup = get_forecast_keyboard()
 
     try:
         if status_message: await final_target_message.edit_text(message_text, reply_markup=reply_markup)
         else: await callback.message.answer(message_text, reply_markup=reply_markup)
         logger.info(f"User {user_id}: Sent tomorrow's forecast for '{display_name_for_header}'.")
-        # Залишаємося в стані showing_forecast або переходимо в нього, якщо ще не там
         await state.set_state(WeatherStates.showing_forecast) 
     except Exception as e_edit_final:
         logger.error(f"Failed to edit/send final tomorrow's forecast message: {e_edit_final}")
@@ -571,7 +527,6 @@ async def handle_tomorrow_forecast_request(callback: CallbackQuery, state: FSMCo
 
 @router.callback_query(F.data == CALLBACK_WEATHER_SHOW_CURRENT, WeatherStates.showing_forecast)
 async def handle_show_current_weather(callback: CallbackQuery, state: FSMContext, session: AsyncSession, bot: Bot):
-    # ... (код залишається схожим, але переконуємося, що _get_and_show_weather викликається коректно) ...
     user_id = callback.from_user.id
     user_fsm_data = await state.get_data()
     logger.info(f"User {user_id} requested to show CURRENT weather again (from forecast view). FSM data: {user_fsm_data}")
@@ -601,13 +556,13 @@ async def handle_show_current_weather(callback: CallbackQuery, state: FSMContext
             await _get_and_show_weather(bot, callback, state, session, coords=coords_to_show)
         elif city_to_show:
             await _get_and_show_weather(bot, callback, state, session, city_input=city_to_show)
-        else: # Якщо api_request_location було скинуто
-            api_request_location = None # для спрацювання наступного if
+        else: 
+            api_request_location = None 
     
     if not api_request_location: 
         logger.warning(f"User {user_id}: No valid location in FSM to show current weather from forecast. Asking to input city.")
-        # ... (код для запиту міста) ...
-        error_text = "🌍 Будь ласка, введіть назву міста українською мовою:"
+        # Тимчасово прибираємо вимогу української мови з підказки
+        error_text = "🌍 Будь ласка, введіть назву міста:"
         reply_markup = get_weather_enter_city_back_keyboard()
         try:
             await callback.message.edit_text(error_text, reply_markup=reply_markup)
@@ -622,10 +577,16 @@ async def handle_show_current_weather(callback: CallbackQuery, state: FSMContext
         except: pass
 
 
-@router.callback_query(F.data == CALLBACK_WEATHER_BACK_TO_MAIN, (WeatherStates.waiting_for_city or WeatherStates.showing_weather or WeatherStates.showing_forecast))
+@router.callback_query(
+    F.data == CALLBACK_WEATHER_BACK_TO_MAIN, 
+    WeatherStates.waiting_for_city, 
+    WeatherStates.showing_weather, 
+    WeatherStates.showing_forecast, 
+    WeatherStates.waiting_for_save_decision
+)
 async def handle_weather_back_to_main(callback: CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
     current_fsm_state = await state.get_state()
     logger.info(f"User {user_id} requested back to main menu from weather module (state: {current_fsm_state}). Setting FSM state to None.")
-    await state.set_state(None)
-    await show_main_menu_message(callback)
+    await state.set_state(None) # Або state.clear(), якщо потрібно очистити і дані FSM
+    await show_main_menu_message(callback) # Ця функція має обробити callback.answer()

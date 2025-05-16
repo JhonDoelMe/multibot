@@ -4,22 +4,17 @@ import logging
 import asyncio
 import aiohttp
 from typing import Optional, Dict, Any
-from datetime import datetime as dt_datetime, timedelta, timezone # Додано timedelta, dt_datetime, timezone
-import pytz # pytz потрібен для TZ_KYIV
+from datetime import datetime as dt_datetime, timedelta, timezone
+import pytz
 from aiogram import Bot
 from aiocache import cached
 
 from src import config
-# Імпортуємо DAYS_OF_WEEK_UK з основного сервісу погоди для консистентності
 from src.modules.weather.service import DAYS_OF_WEEK_UK 
 
 logger = logging.getLogger(__name__)
 
-# Використовуємо HTTPS, якщо API його підтримує, для більшої безпеки.
-# Якщо виникають проблеми, можна повернути на HTTP, але HTTPS є кращим.
-# WEATHERAPI_BASE_URL = "http://api.weatherapi.com/v1"
 WEATHERAPI_BASE_URL = "https://api.weatherapi.com/v1"
-
 
 WEATHERAPI_CURRENT_URL = f"{WEATHERAPI_BASE_URL}/current.json"
 WEATHERAPI_FORECAST_URL = f"{WEATHERAPI_BASE_URL}/forecast.json"
@@ -61,8 +56,6 @@ def _generate_weatherapi_error_response(code: int, message: str, error_details: 
 
 def _weatherapi_generic_key_builder(func_ref: Any, *args: Any, **kwargs: Any) -> str:
     location_str = kwargs.get("location")
-    if location_str is None and len(args) > 1 and isinstance(args[1], str):
-        location_str = args[1]
     endpoint_name = kwargs.get("endpoint_name", "unknown_endpoint")
     days_arg = kwargs.get("days")
     safe_location = str(location_str).strip().lower() if location_str else "unknown_location"
@@ -98,19 +91,21 @@ async def get_current_weather_weatherapi(bot: Bot, *, location: str) -> Dict[str
                             if "error" in data:
                                 error_content = data["error"]
                                 logger.error(f"WeatherAPI.com returned an error in JSON for current weather '{location}': {error_content}")
-                                # Перевірка країни, якщо API повернуло помилку, але з даними локації
-                                country_name = data.get("location", {}).get("country")
-                                if country_name and country_name.lower() not in ["ukraine", "украина", "україна"]:
-                                     api_name = data.get("location", {}).get("name", location)
-                                     return _generate_weatherapi_error_response(404, f"Місто '{api_name}' знаходиться поза межами України.", error_details=error_content)
+                                # --- ТИМЧАСОВО ВИМКНЕНО ПЕРЕВІРКУ КРАЇНИ (навіть при помилці API) ---
+                                # country_name = data.get("location", {}).get("country")
+                                # if country_name and country_name.lower() not in ["ukraine", "украина", "україна"]:
+                                #      api_name = data.get("location", {}).get("name", location)
+                                #      return _generate_weatherapi_error_response(404, f"Місто '{api_name}' знаходиться поза межами України.", error_details=error_content)
+                                # --- КІНЕЦЬ ТИМЧАСОВО ВИМКНЕНОЇ ПЕРЕВІРКИ ---
                                 return _generate_weatherapi_error_response(error_content.get("code", 500), error_content.get("message", "Помилка від WeatherAPI"), error_details=error_content)
                             
-                            # Перевірка країни для успішної відповіді
-                            country_name = data.get("location", {}).get("country")
-                            if country_name and country_name.lower() not in ["ukraine", "украина", "україна"]:
-                                api_name = data.get("location", {}).get("name", location)
-                                logger.warning(f"City '{location}' (API name: {api_name}) found in country {country_name}, not Ukraine (WeatherAPI).")
-                                return _generate_weatherapi_error_response(404, f"Місто '{api_name}' знаходиться поза межами України.")
+                            # --- ТИМЧАСОВО ВИМКНЕНО ПЕРЕВІРКУ КРАЇНИ (для успішної відповіді) ---
+                            # country_name = data.get("location", {}).get("country")
+                            # if country_name and country_name.lower() not in ["ukraine", "украина", "україна"]:
+                            #     api_name = data.get("location", {}).get("name", location)
+                            #     logger.warning(f"City '{location}' (API name: {api_name}) found in country {country_name}, not Ukraine (WeatherAPI). (Country check disabled)")
+                            #     # return _generate_weatherapi_error_response(404, f"Місто '{api_name}' знаходиться поза межами України.")
+                            # --- КІНЕЦЬ ТИМЧАСОВО ВИМКНЕНОЇ ПЕРЕВІРКИ ---
 
                             logger.debug(f"WeatherAPI.com current weather response for '{location}': status={response.status}, data preview={str(data)[:300]}")
                             return data
@@ -118,7 +113,6 @@ async def get_current_weather_weatherapi(bot: Bot, *, location: str) -> Dict[str
                             logger.error(f"Attempt {attempt + 1}: Failed to decode JSON from WeatherAPI.com for '{location}'. Response: {response_data_text[:500]}")
                             last_exception = Exception("Невірний формат JSON відповіді від WeatherAPI.com")
                             return _generate_weatherapi_error_response(500, "Невірний формат JSON відповіді від резервного API.")
-                    # ... (решта обробки помилок HTTP) ...
                     elif response.status == 400:
                          logger.error(f"WeatherAPI.com returned 400 Bad Request for '{location}'. Response: {response_data_text[:500]}")
                          try: data = await response.json(content_type=None); api_error = data.get("error")
@@ -168,9 +162,8 @@ async def get_forecast_weatherapi(bot: Bot, *, location: str, days: int = 3) -> 
     if not location or not str(location).strip():
         logger.warning("Service get_forecast_weatherapi: Received empty location.")
         return _generate_weatherapi_error_response(400, "Назва міста або координати для прогнозу не можуть бути порожніми.")
-    if not 1 <= days <= 10: # WeatherAPI зазвичай дозволяє до 3 днів на безкоштовному тарифі, до 10-14 на платних
+    if not 1 <= days <= 10: 
         logger.warning(f"Service get_forecast_weatherapi: Invalid number of days requested: {days}. API might default or error.")
-        # Не змінюємо 'days' тут, дозволяємо API обробити це.
 
     params = {"key": config.WEATHERAPI_COM_KEY, "q": str(location).strip(), "days": days, "lang": "uk", "alerts": "no", "aqi": "no"}
     last_exception = None
@@ -187,19 +180,21 @@ async def get_forecast_weatherapi(bot: Bot, *, location: str, days: int = 3) -> 
                             if "error" in data:
                                 error_content = data["error"]
                                 logger.error(f"WeatherAPI.com returned an error in JSON for forecast '{location}', {days}d: {error_content}")
-                                # Перевірка країни
-                                country_name = data.get("location", {}).get("country")
-                                if country_name and country_name.lower() not in ["ukraine", "украина", "україна"]:
-                                     api_name = data.get("location", {}).get("name", location)
-                                     return _generate_weatherapi_error_response(404, f"Прогноз для міста '{api_name}' доступний, але воно поза межами України.", error_details=error_content)
+                                # --- ТИМЧАСОВО ВИМКНЕНО ПЕРЕВІРКУ КРАЇНИ ---
+                                # country_name = data.get("location", {}).get("country")
+                                # if country_name and country_name.lower() not in ["ukraine", "украина", "україна"]:
+                                #      api_name = data.get("location", {}).get("name", location)
+                                #      return _generate_weatherapi_error_response(404, f"Прогноз для міста '{api_name}' доступний, але воно поза межами України.", error_details=error_content)
+                                # --- КІНЕЦЬ ТИМЧАСОВО ВИМКНЕНОЇ ПЕРЕВІРКИ ---
                                 return _generate_weatherapi_error_response(error_content.get("code", 500), error_content.get("message", "Помилка від WeatherAPI прогнозу"), error_details=error_content)
                             
-                            # Перевірка країни для успішної відповіді
-                            country_name = data.get("location", {}).get("country")
-                            if country_name and country_name.lower() not in ["ukraine", "украина", "україна"]:
-                                api_name = data.get("location", {}).get("name", location)
-                                logger.warning(f"Forecast for city '{location}' (API name: {api_name}) is for country {country_name}, not Ukraine (WeatherAPI).")
-                                return _generate_weatherapi_error_response(404, f"Прогноз для міста '{api_name}' доступний, але воно поза межами України.")
+                            # --- ТИМЧАСОВО ВИМКНЕНО ПЕРЕВІРКУ КРАЇНИ ---
+                            # country_name = data.get("location", {}).get("country")
+                            # if country_name and country_name.lower() not in ["ukraine", "украина", "україна"]:
+                            #     api_name = data.get("location", {}).get("name", location)
+                            #     logger.warning(f"Forecast for city '{location}' (API name: {api_name}) is for country {country_name}, not Ukraine (WeatherAPI). (Country check disabled)")
+                            #     # return _generate_weatherapi_error_response(404, f"Прогноз для міста '{api_name}' доступний, але воно поза межами України.")
+                            # --- КІНЕЦЬ ТИМЧАСОВО ВИМКНЕНОЇ ПЕРЕВІРКИ ---
 
                             logger.debug(f"WeatherAPI.com forecast response for '{location}', {days}d: status={response.status}, data preview={str(data)[:300]}")
                             return data
@@ -207,7 +202,6 @@ async def get_forecast_weatherapi(bot: Bot, *, location: str, days: int = 3) -> 
                             logger.error(f"Attempt {attempt + 1}: Failed to decode JSON forecast from WeatherAPI.com for '{location}'. Response: {response_data_text[:500]}")
                             last_exception = Exception("Невірний формат JSON відповіді від WeatherAPI.com (прогноз)")
                             return _generate_weatherapi_error_response(500, "Невірний формат JSON відповіді від резервного API прогнозу.")
-                    # ... (решта обробки помилок HTTP як у get_current_weather_weatherapi) ...
                     elif response.status == 400:
                          logger.error(f"WeatherAPI.com returned 400 Bad Request for forecast '{location}'. Response: {response_data_text[:500]}")
                          try: data = await response.json(content_type=None); api_error = data.get("error")
@@ -252,10 +246,8 @@ def format_weather_backup_message(data: Dict[str, Any], requested_location: str)
         error_info = data["error"]
         error_code = error_info.get('code', 'N/A')
         error_message = error_info.get('message', 'Невідома помилка резервного API')
-        # Додаємо requested_location до повідомлення про помилку для ясності
         return f"😔 Не вдалося отримати резервну погоду для <b>{requested_location}</b>.\n<i>Причина: {error_message} (Код: {error_code})</i>\n<tg-spoiler>Джерело: weatherapi.com (резерв)</tg-spoiler>"
     
-    # Якщо це помилка, яку повернуло саме API WeatherAPI (без нашої обгортки "source_api")
     if "error" in data and isinstance(data["error"], dict) and "message" in data["error"]:
          error_info = data["error"]
          error_code = error_info.get('code', 'API')
@@ -353,7 +345,7 @@ def format_forecast_backup_message(data: Dict[str, Any], requested_location: str
     else:
         days_shown = 0
         for day_data in forecast_days_list:
-            if days_shown >= 3: # WeatherAPI безкоштовно зазвичай дає 3 дні
+            if days_shown >= 3: 
                 break
             if not isinstance(day_data, dict): continue
 
@@ -393,17 +385,11 @@ def format_forecast_backup_message(data: Dict[str, Any], requested_location: str
     message_lines.append("\n<tg-spoiler>Джерело: weatherapi.com (резерв)</tg-spoiler>")
     return "\n".join(filter(None, message_lines))
 
-# --- Нова функція для прогнозу на завтра (резерв) ---
 def format_tomorrow_forecast_backup_message(
-    forecast_api_response: Dict[str, Any], # Це відповідь від get_forecast_weatherapi
+    forecast_api_response: Dict[str, Any],
     requested_location: str
 ) -> str:
-    """
-    Форматує детальний прогноз погоди на завтрашній день з резервного API.
-    Використовує дані, отримані від get_forecast_weatherapi.
-    """
     try:
-        # Перевірка на загальну помилку API у вхідних даних
         if "error" in forecast_api_response and isinstance(forecast_api_response["error"], dict) and \
            ("source_api" in forecast_api_response["error"] or "message" in forecast_api_response["error"]):
             error_info = forecast_api_response["error"]
@@ -423,8 +409,6 @@ def format_tomorrow_forecast_backup_message(
             logger.warning(f"Tomorrow's backup forecast: Forecast list is empty for '{display_city_name}'.")
             return f"😥 Детальний резервний прогноз на завтра для <b>{display_city_name}</b> відсутній (немає даних)."
 
-        # Визначаємо завтрашню дату (використовуємо локальний час сервера, оскільки date_epoch від API вже локальний)
-        # Або краще використовувати TZ_KYIV для консистентності, якщо localtime_epoch не завжди надійний
         now_for_date = dt_datetime.now(TZ_KYIV) if TZ_KYIV else dt_datetime.now()
         tomorrow_date_target = (now_for_date + timedelta(days=1)).strftime('%Y-%m-%d')
         
@@ -438,20 +422,18 @@ def format_tomorrow_forecast_backup_message(
         
         if not tomorrow_day_data:
             logger.warning(f"Tomorrow's backup forecast: No forecast data found for date {tomorrow_date_target} for '{display_city_name}'. API returned {len(forecast_days_list)} days.")
-            # Перевіримо, чи є хоча б перший день, якщо запит був на 1 день (завтра)
             if len(forecast_days_list) > 0 and forecast_days_list[0].get("date") == tomorrow_date_target :
                  tomorrow_day_data = forecast_days_list[0]
-            elif len(forecast_days_list) > 1 and forecast_days_list[1].get("date") == tomorrow_date_target : # WeatherAPI може повернути сьогодні + 2 дні, якщо запит на 3 дні
+            elif len(forecast_days_list) > 1 and forecast_days_list[1].get("date") == tomorrow_date_target :
                  tomorrow_day_data = forecast_days_list[1]
             else:
                 return f"😥 Детальний резервний прогноз на завтра для <b>{display_city_name}</b> відсутній (немає даних на {tomorrow_date_target})."
 
-
         day_info = tomorrow_day_data.get("day", {})
         condition = day_info.get("condition", {})
-        astro_info = tomorrow_day_data.get("astro", {}) # Додаткова інформація про схід/захід сонця
+        astro_info = tomorrow_day_data.get("astro", {})
 
-        date_str_formatted = tomorrow_date_target # Можна відформатувати красивіше
+        date_str_formatted = tomorrow_date_target
         try:
             dt_obj_local = dt_datetime.strptime(tomorrow_date_target, '%Y-%m-%d')
             day_name_en = dt_obj_local.strftime('%A')
@@ -459,7 +441,6 @@ def format_tomorrow_forecast_backup_message(
             date_str_formatted = dt_obj_local.strftime(f'%d.%m.%Y ({day_name_uk})')
         except Exception as e_date:
             logger.warning(f"Could not re-format tomorrow's date string '{tomorrow_date_target}': {e_date}")
-
 
         maxtemp_c = day_info.get("maxtemp_c")
         mintemp_c = day_info.get("mintemp_c")
@@ -474,32 +455,17 @@ def format_tomorrow_forecast_backup_message(
 
         message_lines = [f"☀️ <b>Резервний прогноз на завтра, {date_str_formatted}, для: {display_city_name}</b> {emoji}\n"]
         
-        if avgtemp_c is not None:
-            message_lines.append(f"🌡️ Середня температура: {avgtemp_c:.0f}°C")
-        if mintemp_c is not None and maxtemp_c is not None:
-            message_lines.append(f"📈 Температура: від {mintemp_c:.0f}°C до {maxtemp_c:.0f}°C")
-        
+        if avgtemp_c is not None: message_lines.append(f"🌡️ Середня температура: {avgtemp_c:.0f}°C")
+        if mintemp_c is not None and maxtemp_c is not None: message_lines.append(f"📈 Температура: від {mintemp_c:.0f}°C до {maxtemp_c:.0f}°C")
         message_lines.append(f"📝 Опис: {condition_text.capitalize()}")
-        
         if maxwind_kph is not None:
             wind_mps = maxwind_kph * 1000 / 3600
             message_lines.append(f"🌬️ Вітер: до {wind_mps:.1f} м/с")
-        
-        if totalprecip_mm is not None and totalprecip_mm > 0:
-            message_lines.append(f"💧 Опади: {totalprecip_mm:.1f} мм")
-        elif totalprecip_mm is not None: # totalprecip_mm == 0
-             message_lines.append(f"💧 Опади: без істотних опадів")
-
-
-        if avghumidity is not None:
-            message_lines.append(f"💧 Вологість: ~{avghumidity:.0f}%")
-
-        if astro_info.get("sunrise") and astro_info.get("sunset"):
-            message_lines.append(f"🌅 Схід: {astro_info['sunrise']} 🌇 Захід: {astro_info['sunset']}")
+        if totalprecip_mm is not None and totalprecip_mm > 0: message_lines.append(f"💧 Опади: {totalprecip_mm:.1f} мм")
+        elif totalprecip_mm is not None: message_lines.append(f"💧 Опади: без істотних опадів")
+        if avghumidity is not None: message_lines.append(f"💧 Вологість: ~{avghumidity:.0f}%")
+        if astro_info.get("sunrise") and astro_info.get("sunset"): message_lines.append(f"🌅 Схід: {astro_info['sunrise']} 🌇 Захід: {astro_info['sunset']}")
             
-        # Можна додати погодинний прогноз, якщо потрібно, аналізуючи `tomorrow_day_data.get("hour", [])`
-        # Але для "прогнозу на завтра" загальної інформації може бути достатньо.
-
         message_lines.append("\n<tg-spoiler>Джерело: weatherapi.com (резерв). Прогноз може уточнюватися.</tg-spoiler>")
         return "\n".join(filter(None, message_lines))
 
@@ -507,4 +473,4 @@ def format_tomorrow_forecast_backup_message(
         logger.exception(f"Error formatting tomorrow's backup forecast for '{requested_location}': {e}", exc_info=True)
         return f"😥 Вибачте, сталася помилка при обробці резервного прогнозу на завтра для <b>{requested_location}</b>."
 
-# --- Кінець нової функції для прогнозу на завтра (резерв) ---
+# --- END OF FILE ---

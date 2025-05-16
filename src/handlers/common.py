@@ -3,17 +3,18 @@
 import logging
 from typing import Union, Optional
 from aiogram import Bot, Router, F
-from aiogram.fsm.context import FSMContext
+from aiogram.fsm.context import FSMContext # Потрібен для передачі в settings_entry_point
 from aiogram.types import Message, User as AiogramUser
 from sqlalchemy.ext.asyncio import AsyncSession
-from aiogram.filters import CommandStart # <<< ДОДАНО ІМПОРТ
+from aiogram.filters import CommandStart
 
-from src.db.models import User, ServiceChoice
+from src.db.models import User, ServiceChoice # Наша модель User
 from src.keyboards.reply_main import (
     get_main_reply_keyboard, BTN_WEATHER, BTN_CURRENCY, BTN_ALERTS,
     BTN_LOCATION, BTN_SETTINGS
 )
 
+# Імпортуємо entry_points для всіх сервісів
 from src.modules.weather.handlers import weather_entry_point as main_weather_ep
 from src.modules.weather.handlers import process_main_geolocation_button
 
@@ -24,7 +25,7 @@ from src.modules.alert.handlers import alert_entry_point as main_alert_ep
 from src.modules.alert_backup.handlers import alert_backup_entry_point as backup_alert_ep
 
 from src.modules.currency.handlers import currency_entry_point
-from src.modules.settings.handlers import settings_entry_point
+from src.modules.settings.handlers import settings_entry_point # Ця функція тепер приймає state
 
 logger = logging.getLogger(__name__)
 router = Router(name="common-handlers")
@@ -37,6 +38,10 @@ async def _get_user_or_default_settings(session: AsyncSession, user_id: int, use
             db_user.preferred_weather_service = ServiceChoice.OPENWEATHERMAP
         if db_user.preferred_alert_service is None:
             db_user.preferred_alert_service = ServiceChoice.UKRAINEALARM
+        # Перевірка нових полів для існуючих користувачів
+        if not hasattr(db_user, 'weather_reminder_enabled') or db_user.weather_reminder_enabled is None:
+            db_user.weather_reminder_enabled = False
+        # weather_reminder_time може бути None за замовчуванням
         return db_user
     else:
         logger.warning(f"User {user_id} not found in DB by _get_user_or_default_settings. Returning User object with defaults for logic.")
@@ -48,13 +53,15 @@ async def _get_user_or_default_settings(session: AsyncSession, user_id: int, use
             user_id=user_id,
             first_name=first_name_default,
             preferred_weather_service=ServiceChoice.OPENWEATHERMAP,
-            preferred_alert_service=ServiceChoice.UKRAINEALARM
+            preferred_alert_service=ServiceChoice.UKRAINEALARM,
+            weather_reminder_enabled=False, # Значення за замовчуванням
+            weather_reminder_time=None      # Значення за замовчуванням
         )
 
 
-@router.message(CommandStart()) # Тепер CommandStart має бути визначено
+@router.message(CommandStart())
 async def handle_start(message: Message, session: AsyncSession, state: FSMContext):
-    await state.clear()
+    await state.clear() 
     user_tg = message.from_user
     if not user_tg:
         logger.warning("Received /start from a user with no user info (message.from_user is None).")
@@ -74,7 +81,7 @@ async def handle_start(message: Message, session: AsyncSession, state: FSMContex
         if db_user.first_name != first_name:
             db_user.first_name = first_name
             needs_commit = True
-        if db_user.last_name != last_name:
+        if db_user.last_name != last_name: 
             db_user.last_name = last_name
             needs_commit = True
         if db_user.username != username:
@@ -89,6 +96,12 @@ async def handle_start(message: Message, session: AsyncSession, state: FSMContex
             db_user.preferred_alert_service = ServiceChoice.UKRAINEALARM
             needs_commit = True
             logger.info(f"User {user_id}: Setting default preferred_alert_service to UkraineAlarm.")
+        # Ініціалізація нових полів для існуючих користувачів, якщо їх немає
+        if not hasattr(db_user, 'weather_reminder_enabled') or db_user.weather_reminder_enabled is None:
+            db_user.weather_reminder_enabled = False
+            needs_commit = True
+            logger.info(f"User {user_id}: Initializing weather_reminder_enabled to False.")
+        # weather_reminder_time може бути None, це нормально, якщо нагадування вимкнені
         
         if needs_commit:
             logger.info(f"User {user_id}: Updating user info/default settings in DB.")
@@ -101,7 +114,9 @@ async def handle_start(message: Message, session: AsyncSession, state: FSMContex
             last_name=last_name,
             username=username,
             preferred_weather_service=ServiceChoice.OPENWEATHERMAP,
-            preferred_alert_service=ServiceChoice.UKRAINEALARM
+            preferred_alert_service=ServiceChoice.UKRAINEALARM,
+            weather_reminder_enabled=False, # Значення за замовчуванням
+            weather_reminder_time=None      # Значення за замовчуванням
         )
         session.add(new_user)
     
@@ -123,14 +138,14 @@ async def handle_weather_button(message: Message, state: FSMContext, session: As
         await main_weather_ep(message, state, session, bot)
 
 @router.message(F.text == BTN_ALERTS)
-async def handle_alerts_button(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
+async def handle_alerts_button(message: Message, state: FSMContext, session: AsyncSession, bot: Bot): # Додано state, session для можливої передачі
     user_settings = await _get_user_or_default_settings(session, message.from_user.id, message.from_user)
     logger.info(f"User {message.from_user.id} pressed Alerts button. Preferred service: {user_settings.preferred_alert_service}")
     if user_settings.preferred_alert_service == ServiceChoice.ALERTSINUA:
-        await backup_alert_ep(message, bot) 
-    else:
-        await main_alert_ep(message, bot)
-
+        # backup_alert_ep може вимагати state, session, якщо його логіка зміниться
+        await backup_alert_ep(message, bot) # Поки що передаємо тільки message, bot
+    else: 
+        await main_alert_ep(message, bot) # Аналогічно
 
 @router.message(F.location)
 async def handle_any_geolocation(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
@@ -158,9 +173,12 @@ async def handle_any_geolocation(message: Message, state: FSMContext, session: A
 
 
 @router.message(F.text == BTN_CURRENCY)
-async def handle_currency_text_request(message: Message, bot: Bot):
-     await currency_entry_point(message, bot)
+async def handle_currency_text_request(message: Message, state: FSMContext, session: AsyncSession, bot: Bot): # Додано state, session
+     # currency_entry_point може не вимагати state, session, але для уніфікації можна додати
+     await currency_entry_point(message, bot) # Поки що передаємо тільки message, bot
 
+# ВИПРАВЛЕНО: Додано state: FSMContext до сигнатури та передано у виклик
 @router.message(F.text == BTN_SETTINGS)
-async def handle_settings_button(message: Message, session: AsyncSession, bot: Bot):
-    await settings_entry_point(message, session, bot)
+async def handle_settings_button(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
+    await settings_entry_point(message, session, bot, state)
+    # state передається для можливого використання в settings_entry_point
