@@ -46,6 +46,7 @@ def _weather_cache_key_builder(function_prefix: str, city_name: Optional[str] = 
         safe_city_name = str(city_name).strip().lower()
         return f"weather:{safe_prefix}:city:{safe_city_name}"
     elif latitude is not None and longitude is not None:
+        # Забезпечуємо однаковий формат для ключів кешу координат
         return f"weather:{safe_prefix}:coords:{latitude:.4f}:{longitude:.4f}"
     logger.warning(f"_weather_cache_key_builder called with no city_name or coords for prefix {safe_prefix}. Generating unique key.")
     return f"weather:{safe_prefix}:unknown_params_{dt_datetime.now().timestamp()}_{city_name}_{latitude}_{longitude}"
@@ -86,7 +87,6 @@ async def get_weather_data(bot: Bot, *, city_name: str) -> Dict[str, Any]:
                             # if country_code and country_code.upper() != "UA":
                             #     api_name = data.get('name', safe_city_name)
                             #     logger.warning(f"City '{safe_city_name}' (API name: {api_name}) found in country {country_code}, not UA. (Country check currently disabled for testing)")
-                            #     # Замість повернення помилки, просто логуємо і продовжуємо
                             #     # return _generate_error_response(404, f"Місто '{api_name}' знаходиться поза межами України.")
                             # --- КІНЕЦЬ ТИМЧАСОВО ВИМКНЕНОЇ ПЕРЕВІРКИ ---
                             
@@ -138,6 +138,7 @@ async def get_weather_data(bot: Bot, *, city_name: str) -> Dict[str, Any]:
             return _generate_error_response(final_error_code, error_message)
     return _generate_error_response(500, f"Не вдалося отримати дані для '{safe_city_name}' (неочікуваний вихід з функції).")
 
+# ВИПРАВЛЕНО key_builder для get_weather_data_by_coords
 @cached(ttl=config.CACHE_TTL_WEATHER,
         key_builder=lambda func, bot_arg, **kwargs: _weather_cache_key_builder(
             "data_coords", 
@@ -166,7 +167,7 @@ async def get_weather_data_by_coords(bot: Bot, *, latitude: float, longitude: fl
                             data = await response.json(content_type=None)
                             logger.debug(f"OWM Weather API response for {location_str}: status={response.status}, name in data='{data.get('name')}', raw_data_preview={str(data)[:200]}")
                             
-                            # --- ТИМЧАСОВО ВИМКНЕНО ПЕРЕВІРКУ КРАЇНИ ДЛЯ КООРДИНАТ (якщо ви вирішили її тут не робити) ---
+                            # --- ТИМЧАСОВО ВИМКНЕНО ПЕРЕВІРКУ КРАЇНИ ДЛЯ КООРДИНАТ ---
                             # country_code = data.get("sys", {}).get("country")
                             # if country_code and country_code.upper() != "UA":
                             #     api_name = data.get('name', location_str)
