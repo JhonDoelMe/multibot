@@ -96,3 +96,5 @@ secret_value.txt
 bot.log
 run_or_start_bot.sh
 cron_bot.log
+run_cron_task.sh
+run_specific_task.sh
