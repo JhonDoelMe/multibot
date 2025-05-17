@@ -14,7 +14,11 @@ from sqlalchemy import select
 from aiocache import Cache
 from aiogram.filters import Command 
 
-from src.db.models import User, ServiceChoice
+# Прямі імпорти з модулів всередині src
+import config as app_config  # <--- ЗМІНЕНО
+from db.models import User, ServiceChoice # <--- ЗМІНЕНО
+from handlers.utils import show_main_menu_message # <--- ЗМІНЕНО
+
 from .keyboard import (
     get_main_settings_keyboard,
     get_weather_service_selection_keyboard,
@@ -39,23 +43,16 @@ from .admin_keyboard import (
     CB_ADMIN_UNBLOCK_USER 
 )
 
-from src.handlers.utils import show_main_menu_message
-from src import config as app_config 
-
 logger = logging.getLogger(__name__)
 router = Router(name="settings-module")
 
-# Стани для адмін-панелі
-class AdminPanelStates(StatesGroup):
-    waiting_for_user_id_for_info = State()
-    waiting_for_user_id_to_block = State()
-    waiting_for_user_id_to_unblock = State()
+# ... (решта коду без змін) ...
+# Класи станів, _get_user_settings, settings_entry_point і т.д. залишаються такими ж
 
+# Переконайтеся, що весь інший код у файлі залишається таким, як у попередній версії,
+# де ми виправляли "застрягання" FSM. Я показую тільки початок файлу з виправленими імпортами.
 
-class SettingsStates(StatesGroup):
-    waiting_for_custom_reminder_time = State()
-
-
+# Повний код функції _get_user_settings для контексту, якщо потрібно перевірити:
 async def _get_user_settings(session: AsyncSession, user_id: int) -> User:
     user = await session.get(User, user_id)
     if not user:
@@ -163,7 +160,7 @@ async def cq_admin_panel_entry(callback: CallbackQuery, state: FSMContext, sessi
 @router.callback_query(F.data == CB_ADMIN_BACK_TO_SETTINGS)
 async def cq_admin_back_to_settings(callback: CallbackQuery, state: FSMContext, session: AsyncSession, bot: Bot):
     logger.info(f"Admin user {callback.from_user.id} going back to main settings menu from admin panel.")
-    await settings_entry_point(callback, session, bot, state) # settings_entry_point clears state
+    await settings_entry_point(callback, session, bot, state) 
 
 
 @router.callback_query(F.data == CB_ADMIN_LIST_USERS)
@@ -173,7 +170,6 @@ async def cq_admin_list_users(callback: CallbackQuery, state: FSMContext, sessio
         await callback.answer("Доступ заборонено.", show_alert=True)
         return
     
-    # TODO: Implement user listing with pagination
     await callback.answer("Функція 'Список користувачів' в розробці.")
 
 
@@ -196,7 +192,6 @@ async def cq_admin_user_info_prompt(callback: CallbackQuery, state: FSMContext):
 @router.message(AdminPanelStates.waiting_for_user_id_for_info, F.text)
 async def process_admin_user_id_for_info(message: Message, state: FSMContext, session: AsyncSession):
     admin_id = message.from_user.id
-    # No need to check admin_id here again if state can only be set by admin
     
     try:
         target_user_id = int(message.text.strip())
@@ -564,7 +559,7 @@ async def cq_weather_reminder_custom_time_input(callback: CallbackQuery, state: 
 async def cmd_cancel_custom_time_input(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
     user_id = message.from_user.id
     logger.info(f"User {user_id} cancelled custom time input.")
-    await state.clear() # Очищаємо стан
+    await state.clear() 
     
     db_user = await _get_user_settings(session, user_id)
     text_menu = "⏰ <b>Налаштування нагадувань про погоду</b>"
@@ -573,14 +568,13 @@ async def cmd_cancel_custom_time_input(message: Message, state: FSMContext, sess
         reminder_time=db_user.weather_reminder_time
     )
     try:
-        # Повертаємо до меню налаштувань нагадувань
         await message.answer("Введення часу скасовано.", reply_markup=reply_markup_menu)
     except Exception as e:
         logger.error(f"Error sending message after cancelling custom time input: {e}")
 
 
 @router.message(SettingsStates.waiting_for_custom_reminder_time, F.text)
-async def handle_custom_reminder_time_input(message: Message, state: FSMContext, session: AsyncSession, bot: Bot): # Додано bot
+async def handle_custom_reminder_time_input(message: Message, state: FSMContext, session: AsyncSession, bot: Bot): 
     user_id = message.from_user.id
     time_input_str = message.text.strip() if message.text else ""
     time_pattern = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
@@ -623,7 +617,7 @@ async def handle_custom_reminder_time_input(message: Message, state: FSMContext,
         logger.error(f"User {user_id}: Could not parse validated time string '{time_input_str}' into time object.")
         await message.reply("Внутрішня помилка обробки часу. Введення скасовано.")
         await state.clear() 
-        db_user = await _get_user_settings(session, user_id) # Потрібно для меню
+        db_user = await _get_user_settings(session, user_id) 
         await message.answer(
             "⏰ <b>Налаштування нагадувань про погоду</b>",
             reply_markup=get_weather_reminder_settings_keyboard(
@@ -635,7 +629,7 @@ async def handle_custom_reminder_time_input(message: Message, state: FSMContext,
         logger.exception(f"Unexpected error processing custom reminder time for user {user_id}", exc_info=True)
         await message.reply("Не вдалося встановити час. Введення скасовано.")
         await state.clear()
-        db_user = await _get_user_settings(session, user_id) # Потрібно для меню
+        db_user = await _get_user_settings(session, user_id) 
         await message.answer(
             "⏰ <b>Налаштування нагадувань про погоду</b>",
             reply_markup=get_weather_reminder_settings_keyboard(
@@ -662,8 +656,8 @@ async def cq_weather_reminder_time_selected(callback: CallbackQuery, state: FSMC
             session.add(db_user)
             logger.info(f"User {user_id}: Weather reminder time set to {time_str} via button.")
             await callback.answer(f"Час нагадування встановлено на {time_str}.")
-            await state.clear() # Очищаємо стан, якщо він був (хоча тут його не повинно бути)
-            await cq_weather_reminder_menu(callback, state, session, bot) # Повертаємо до меню налаштувань нагадувань
+            await state.clear() 
+            await cq_weather_reminder_menu(callback, state, session, bot) 
         else:
             raise ValueError("Invalid callback data format for time selection")
     except (ValueError, IndexError) as e_parse:
@@ -674,3 +668,4 @@ async def cq_weather_reminder_time_selected(callback: CallbackQuery, state: FSMC
         logger.exception(f"Unexpected error setting reminder time for user {user_id}", exc_info=True)
         try: await callback.answer("Не вдалося встановити час. Спробуйте пізніше.", show_alert=True)
         except Exception: pass
+

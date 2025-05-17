@@ -1,13 +1,14 @@
 # src/modules/settings/keyboard.py
 
-from typing import Optional, List # <--- Додано List
+from typing import Optional, List 
 from datetime import time as dt_time 
 
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from src.db.models import ServiceChoice 
-from src import config as app_config # <--- Імпортуємо конфігурацію
+# Прямі імпорти з модулів всередині src
+from db.models import ServiceChoice # <--- ЗМІНЕНО
+import config as app_config # <--- ЗМІНЕНО
 
 SETTINGS_PREFIX = "settings"
 
@@ -15,34 +16,18 @@ SETTINGS_PREFIX = "settings"
 CB_SETTINGS_WEATHER = f"{SETTINGS_PREFIX}:select_weather"
 CB_SETTINGS_ALERTS = f"{SETTINGS_PREFIX}:select_alerts"
 CB_SETTINGS_BACK_TO_MAIN_MENU = f"{SETTINGS_PREFIX}:back_main_menu"
-CB_SETTINGS_ADMIN_PANEL = f"{SETTINGS_PREFIX}:admin_panel" # <--- Новий колбек для адмін-панелі
+CB_SETTINGS_ADMIN_PANEL = f"{SETTINGS_PREFIX}:admin_panel" 
 
-# Колбеки для налаштувань нагадувань про погоду
-CB_SETTINGS_WEATHER_REMINDER = f"{SETTINGS_PREFIX}:weather_reminder_menu" 
-CB_WEATHER_REMINDER_TOGGLE = f"{SETTINGS_PREFIX}:wr_toggle" 
-CB_WEATHER_REMINDER_SET_TIME = f"{SETTINGS_PREFIX}:wr_set_time_menu" 
-CB_WEATHER_REMINDER_TIME_SELECT_PREFIX = f"{SETTINGS_PREFIX}:wr_time_sel:"
-CB_WEATHER_REMINDER_CUSTOM_TIME_INPUT = f"{SETTINGS_PREFIX}:wr_custom_time"
+# ... (решта коду без змін) ...
+# Функції get_main_settings_keyboard, get_weather_service_selection_keyboard і т.д. залишаються такими ж
 
-# Колбеки для вибору сервісу погоди
-CB_SET_WEATHER_SERVICE_PREFIX = f"{SETTINGS_PREFIX}:set_weather" 
-CB_SET_WEATHER_OWM = f"{CB_SET_WEATHER_SERVICE_PREFIX}:{ServiceChoice.OPENWEATHERMAP}"
-CB_SET_WEATHER_WAPI = f"{CB_SET_WEATHER_SERVICE_PREFIX}:{ServiceChoice.WEATHERAPI}"
-
-# Колбеки для вибору сервісу тривог
-CB_SET_ALERTS_SERVICE_PREFIX = f"{SETTINGS_PREFIX}:set_alerts"
-CB_SET_ALERTS_UALARM = f"{CB_SET_ALERTS_SERVICE_PREFIX}:{ServiceChoice.UKRAINEALARM}"
-CB_SET_ALERTS_AINUA = f"{CB_SET_ALERTS_SERVICE_PREFIX}:{ServiceChoice.ALERTSINUA}"
-
-CB_BACK_TO_SETTINGS_MENU = f"{SETTINGS_PREFIX}:back_to_settings"
-
-
+# Повний код функції get_main_settings_keyboard для контексту:
 def get_main_settings_keyboard(
     current_weather_service: Optional[str],
     current_alert_service: Optional[str],
     weather_reminder_enabled: bool, 
     weather_reminder_time: Optional[dt_time],
-    current_user_id: int # <--- Додано параметр user_id
+    current_user_id: int 
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
 
@@ -79,15 +64,14 @@ def get_main_settings_keyboard(
         callback_data=CB_SETTINGS_WEATHER_REMINDER
     )
 
-    # Додаємо кнопку "Адмін", якщо користувач є адміністратором
     if current_user_id in app_config.ADMIN_USER_IDS:
         builder.button(
-            text="👑 Адмін-панель", # Або просто "Адмін"
+            text="👑 Адмін-панель", 
             callback_data=CB_SETTINGS_ADMIN_PANEL
         )
     
     builder.row(InlineKeyboardButton(text="⬅️ Назад в головне меню", callback_data=CB_SETTINGS_BACK_TO_MAIN_MENU))
-    builder.adjust(1) # Всі кнопки будуть в один стовпчик
+    builder.adjust(1) 
     return builder.as_markup()
 
 

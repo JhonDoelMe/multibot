@@ -4,7 +4,7 @@ import asyncio
 import logging
 from datetime import datetime, time as dt_time, timedelta, timezone
 
-from sqlalchemy import select, extract, or_, cast, Integer # Додано cast, Integer
+from sqlalchemy import select, extract, or_, cast, Integer 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from aiogram import Bot
 from aiogram.exceptions import (
@@ -12,10 +12,11 @@ from aiogram.exceptions import (
     TelegramBadRequest, TelegramNotFound, TelegramConflictError
 )
 
-from src.db.models import User, ServiceChoice
-from src.modules.weather.service import get_weather_data, format_weather_message
-from src.modules.weather_backup.service import get_current_weather_weatherapi, format_weather_backup_message
-from src import config
+# Прямі імпорти з модулів всередині src
+from db.models import User, ServiceChoice # <--- ЗМІНЕНО
+from modules.weather.service import get_weather_data, format_weather_message # <--- ЗМІНЕНО
+from modules.weather_backup.service import get_current_weather_weatherapi, format_weather_backup_message # <--- ЗМІНЕНО
+import config # <--- ЗМІНЕНО
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +26,7 @@ try:
     logger.info("Scheduler: Kyiv timezone (Europe/Kyiv) loaded using pytz.")
 except ImportError:
     logger.warning("Scheduler: pytz not installed. Using system's understanding of 'Europe/Kyiv' or UTC as fallback for Kyiv time.")
-    if hasattr(config, 'TZ_KYIV') and config.TZ_KYIV:
+    if hasattr(config, 'TZ_KYIV') and config.TZ_KYIV: # Тепер config - це імпортований модуль
         TZ_KYIV = config.TZ_KYIV
         logger.info(f"Scheduler: Kyiv timezone loaded from config: {config.TZ_KYIV_NAME if hasattr(config, 'TZ_KYIV_NAME') else 'Europe/Kyiv'}")
     else:
@@ -51,9 +52,6 @@ async def send_weather_reminders_task(
     logger.info(f"Scheduler: Checking weather reminders for times around {current_time_for_check.strftime('%H:%M')} ({TZ_KYIV}). Will check current and previous minute.")
 
     async with session_factory() as session:
-        # ВИПРАВЛЕННЯ: Використовуємо CAST для порівняння з Integer,
-        # оскільки SQLite strftime повертає рядок, а PostgreSQL extract повертає число.
-        # CAST(... AS INTEGER) працюватиме для обох.
         current_hour = current_time_for_check.hour
         current_minute = current_time_for_check.minute
         prev_hour = time_one_minute_ago.hour
@@ -98,7 +96,7 @@ async def send_weather_reminders_task(
             
             logger.info(f"Scheduler: Processing reminder for user {user.user_id} (chat_id), city: {user.preferred_city}, set time: {user.weather_reminder_time.strftime('%H:%M') if user.weather_reminder_time else 'N/A'}")
             
-            weather_data_response: Optional[dict] = None
+            weather_data_response: Optional[dict] = None # Optional імпортовано з typing
             formatted_weather: str = f"😔 Не вдалося отримати дані про погоду для м. {user.preferred_city} для вашого нагадування."
             is_error_getting_weather = True
 
@@ -164,16 +162,16 @@ async def send_weather_reminders_task(
         if users_to_disable_reminders:
             logger.info(f"Scheduler: Disabling reminders for {len(users_to_disable_reminders)} users.")
             for user_to_disable in users_to_disable_reminders:
-                if user_to_disable in session:
+                if user_to_disable in session: # Перевірка, чи об'єкт вже в сесії
                     user_to_disable.weather_reminder_enabled = False
-                    session.add(user_to_disable)
-                else: 
+                    session.add(user_to_disable) # Додаємо для відстеження змін
+                else: # Якщо об'єкт не в сесії, отримуємо його з БД
                     user_from_db = await session.get(User, user_to_disable.user_id)
                     if user_from_db:
                         user_from_db.weather_reminder_enabled = False
                         session.add(user_from_db)
         
-        if users_to_disable_reminders or successful_sends > 0 or failed_sends > 0:
+        if users_to_disable_reminders or successful_sends > 0 or failed_sends > 0: # Зміни, якщо є що комітити
             try:
                 await session.commit()
                 logger.info(f"Scheduler: Committed DB changes. Successful: {successful_sends}, Failed: {failed_sends}, Disabled: {len(users_to_disable_reminders)}.")
@@ -182,3 +180,4 @@ async def send_weather_reminders_task(
                 await session.rollback()
         else:
             logger.info("Scheduler: No DB changes to commit regarding reminders.")
+
