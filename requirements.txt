@@ -9,3 +9,4 @@ aiocache==0.12.2
 aioredis==2.0.1
 redis>=4.0.0
 pytz==2023.3
+cairosvg==2.8.2
