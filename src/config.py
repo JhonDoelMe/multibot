@@ -4,6 +4,7 @@ import os
 from dotenv import load_dotenv
 import logging
 import sys
+from typing import List, Optional # <--- Додано List, Optional
 
 load_dotenv()
 
@@ -41,15 +42,11 @@ API_SESSION_CONNECT_TIMEOUT = int(os.getenv("API_SESSION_CONNECT_TIMEOUT", 10))
 
 # --- Налаштування кешування (aiocache) ---
 CACHE_BACKEND = os.getenv("CACHE_BACKEND", "memory")
-# CACHE_REDIS_URL використовується для aiocache. RedisStorage для FSM може використовувати інший URL або той самий.
 CACHE_REDIS_URL = os.getenv("CACHE_REDIS_URL", "redis://localhost:6379/0") 
 
 # --- Налаштування Redis для FSM (Finite State Machine) ---
-# Можна використовувати той самий Redis, що й для кешу, але, можливо, іншу базу даних (наприклад, /1 замість /0)
-# Або зовсім інший сервер Redis.
-# Якщо FSM_REDIS_URL не встановлено, бот буде використовувати MemoryStorage (потрібно буде додати логіку в bot.py)
-FSM_STORAGE_TYPE = os.getenv("FSM_STORAGE_TYPE", "memory").lower() # "memory" або "redis"
-FSM_REDIS_URL = os.getenv("FSM_REDIS_URL", "redis://localhost:6379/1") # Окремий URL для FSM Redis
+FSM_STORAGE_TYPE = os.getenv("FSM_STORAGE_TYPE", "memory").lower() 
+FSM_REDIS_URL = os.getenv("FSM_REDIS_URL", "redis://localhost:6379/1") 
 
 CACHE_TTL_ALERTS = int(os.getenv("CACHE_TTL_ALERTS", 60))
 CACHE_TTL_ALERTS_BACKUP = int(os.getenv("CACHE_TTL_ALERTS_BACKUP", 90))
@@ -67,6 +64,16 @@ THROTTLING_RATE_DEFAULT = float(os.getenv("THROTTLING_RATE_DEFAULT", 0.7))
 
 # --- Конфігурація для Nominatim (якщо буде використовуватися) ---
 NOMINATIM_USER_AGENT = os.getenv("NOMINATIM_USER_AGENT", f"TelegramBotAnubisUA/1.0 ({BOT_VERSION})")
+
+# --- ID Адміністраторів ---
+ADMIN_USER_IDS_STR: Optional[str] = os.getenv("ADMIN_USER_IDS")
+ADMIN_USER_IDS: List[int] = []
+if ADMIN_USER_IDS_STR:
+    try:
+        ADMIN_USER_IDS = [int(admin_id.strip()) for admin_id in ADMIN_USER_IDS_STR.split(',') if admin_id.strip()]
+    except ValueError:
+        logger.error(f"Invalid format for ADMIN_USER_IDS: '{ADMIN_USER_IDS_STR}'. Expected comma-separated integers. Admin features might not work correctly.")
+        ADMIN_USER_IDS = []
 
 
 if not BOT_TOKEN:
@@ -138,11 +145,16 @@ def log_config_status():
     logger.info(f"BOT_ENVIRONMENT: {BOT_ENVIRONMENT}")
     logger.info(f"BOT_VERSION: {BOT_VERSION}")
     logger.info(f"NOMINATIM_USER_AGENT: {NOMINATIM_USER_AGENT}")
+    
+    # Логування ID адміністраторів
+    if ADMIN_USER_IDS:
+        logger.info(f"ADMIN_USER_IDS: {ADMIN_USER_IDS}")
+    else:
+        logger.warning("ADMIN_USER_IDS: NOT SET or invalid format. Admin features will be unavailable.")
 
     logger.info(f"THROTTLING_RATE_DEFAULT: {THROTTLING_RATE_DEFAULT}s")
     logger.info("--- End Configuration Status ---")
 
-# Додаємо TZ_KYIV для глобального використання, якщо потрібно
 try:
     import pytz
     TZ_KYIV = pytz.timezone('Europe/Kyiv')
@@ -154,8 +166,8 @@ except ImportError:
     TZ_KYIV_NAME = "N/A (pytz not installed)"
 except pytz.exceptions.UnknownTimeZoneError:
     logger.error("Timezone 'Europe/Kyiv' not found by pytz. Using UTC as fallback for Kyiv time.")
-    from datetime import timezone as dt_timezone # Імпорт для timezone.utc
+    from datetime import timezone as dt_timezone 
     TZ_KYIV = dt_timezone.utc
     TZ_KYIV_NAME = "UTC (fallback)"
 
-# Додаткові налаштування для aiocache
+# Логування статусу конфігурації

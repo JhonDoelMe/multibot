@@ -1,13 +1,13 @@
 # src/modules/settings/keyboard.py
 
-from typing import Optional
-from datetime import time as dt_time # Для анотації типів часу
+from typing import Optional, List # <--- Додано List
+from datetime import time as dt_time 
 
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-# Імпортуємо ServiceChoice для використання в даних колбека
 from src.db.models import ServiceChoice 
+from src import config as app_config # <--- Імпортуємо конфігурацію
 
 SETTINGS_PREFIX = "settings"
 
@@ -15,13 +15,14 @@ SETTINGS_PREFIX = "settings"
 CB_SETTINGS_WEATHER = f"{SETTINGS_PREFIX}:select_weather"
 CB_SETTINGS_ALERTS = f"{SETTINGS_PREFIX}:select_alerts"
 CB_SETTINGS_BACK_TO_MAIN_MENU = f"{SETTINGS_PREFIX}:back_main_menu"
+CB_SETTINGS_ADMIN_PANEL = f"{SETTINGS_PREFIX}:admin_panel" # <--- Новий колбек для адмін-панелі
 
 # Колбеки для налаштувань нагадувань про погоду
 CB_SETTINGS_WEATHER_REMINDER = f"{SETTINGS_PREFIX}:weather_reminder_menu" 
 CB_WEATHER_REMINDER_TOGGLE = f"{SETTINGS_PREFIX}:wr_toggle" 
 CB_WEATHER_REMINDER_SET_TIME = f"{SETTINGS_PREFIX}:wr_set_time_menu" 
 CB_WEATHER_REMINDER_TIME_SELECT_PREFIX = f"{SETTINGS_PREFIX}:wr_time_sel:"
-CB_WEATHER_REMINDER_CUSTOM_TIME_INPUT = f"{SETTINGS_PREFIX}:wr_custom_time" # Новий колбек для кнопки "Ввести свій час"
+CB_WEATHER_REMINDER_CUSTOM_TIME_INPUT = f"{SETTINGS_PREFIX}:wr_custom_time"
 
 # Колбеки для вибору сервісу погоди
 CB_SET_WEATHER_SERVICE_PREFIX = f"{SETTINGS_PREFIX}:set_weather" 
@@ -33,7 +34,6 @@ CB_SET_ALERTS_SERVICE_PREFIX = f"{SETTINGS_PREFIX}:set_alerts"
 CB_SET_ALERTS_UALARM = f"{CB_SET_ALERTS_SERVICE_PREFIX}:{ServiceChoice.UKRAINEALARM}"
 CB_SET_ALERTS_AINUA = f"{CB_SET_ALERTS_SERVICE_PREFIX}:{ServiceChoice.ALERTSINUA}"
 
-# Колбек для повернення з меню вибору сервісу/нагадувань в головне меню налаштувань
 CB_BACK_TO_SETTINGS_MENU = f"{SETTINGS_PREFIX}:back_to_settings"
 
 
@@ -41,7 +41,8 @@ def get_main_settings_keyboard(
     current_weather_service: Optional[str],
     current_alert_service: Optional[str],
     weather_reminder_enabled: bool, 
-    weather_reminder_time: Optional[dt_time] 
+    weather_reminder_time: Optional[dt_time],
+    current_user_id: int # <--- Додано параметр user_id
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
 
@@ -77,9 +78,16 @@ def get_main_settings_keyboard(
         text=f"⏰ Нагадування ({reminder_status_display}, {reminder_time_display})",
         callback_data=CB_SETTINGS_WEATHER_REMINDER
     )
+
+    # Додаємо кнопку "Адмін", якщо користувач є адміністратором
+    if current_user_id in app_config.ADMIN_USER_IDS:
+        builder.button(
+            text="👑 Адмін-панель", # Або просто "Адмін"
+            callback_data=CB_SETTINGS_ADMIN_PANEL
+        )
     
     builder.row(InlineKeyboardButton(text="⬅️ Назад в головне меню", callback_data=CB_SETTINGS_BACK_TO_MAIN_MENU))
-    builder.adjust(1)
+    builder.adjust(1) # Всі кнопки будуть в один стовпчик
     return builder.as_markup()
 
 
@@ -171,7 +179,6 @@ def get_weather_reminder_time_selection_keyboard(
     if buttons_in_row:
         builder.row(*buttons_in_row)
         
-    # Нова кнопка для ручного введення часу
     builder.row(InlineKeyboardButton(
         text="📝 Ввести свій час", 
         callback_data=CB_WEATHER_REMINDER_CUSTOM_TIME_INPUT

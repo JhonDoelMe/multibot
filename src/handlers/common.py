@@ -3,11 +3,12 @@
 import logging
 from typing import Union, Optional
 from aiogram import Bot, Router, F
-from aiogram.fsm.context import FSMContext # Потрібен для передачі в settings_entry_point
-from aiogram.types import Message, User as AiogramUser
+from aiogram.fsm.context import FSMContext 
+from aiogram.types import Message, User as AiogramUser # Перейменовано User на AiogramUser для уникнення конфлікту
 from sqlalchemy.ext.asyncio import AsyncSession
 from aiogram.filters import CommandStart
 
+# Використовуємо AiogramUser для підказки типу, щоб уникнути конфлікту з локальною моделлю User
 from src.db.models import User, ServiceChoice # Наша модель User
 from src.keyboards.reply_main import (
     get_main_reply_keyboard, BTN_WEATHER, BTN_CURRENCY, BTN_ALERTS,
@@ -31,32 +32,42 @@ logger = logging.getLogger(__name__)
 router = Router(name="common-handlers")
 
 
-async def _get_user_or_default_settings(session: AsyncSession, user_id: int, user_tg_obj: Optional[AiogramUser] = None) -> User:
+async def _get_user_or_default_settings(session: AsyncSession, user_id: int, tg_user_obj: Optional[AiogramUser] = None) -> User:
     db_user = await session.get(User, user_id)
     if db_user:
+        # Переконуємося, що стандартні налаштування сервісів встановлені, якщо вони None
         if db_user.preferred_weather_service is None:
             db_user.preferred_weather_service = ServiceChoice.OPENWEATHERMAP
         if db_user.preferred_alert_service is None:
             db_user.preferred_alert_service = ServiceChoice.UKRAINEALARM
-        # Перевірка нових полів для існуючих користувачів
+        
+        # Ініціалізуємо нові поля для існуючих користувачів, якщо їх немає або вони None
         if not hasattr(db_user, 'weather_reminder_enabled') or db_user.weather_reminder_enabled is None:
             db_user.weather_reminder_enabled = False
-        # weather_reminder_time може бути None за замовчуванням
+        if not hasattr(db_user, 'is_blocked') or db_user.is_blocked is None:
+            db_user.is_blocked = False # Ініціалізуємо is_blocked для існуючих користувачів
         return db_user
     else:
-        logger.warning(f"User {user_id} not found in DB by _get_user_or_default_settings. Returning User object with defaults for logic.")
+        logger.warning(f"User {user_id} not found in DB by _get_user_or_default_settings. Creating new User object with defaults.")
         first_name_default = "Користувач"
-        if user_tg_obj and user_tg_obj.first_name:
-            first_name_default = user_tg_obj.first_name
+        if tg_user_obj and tg_user_obj.first_name:
+            first_name_default = tg_user_obj.first_name
         
-        return User(
+        # Створюємо новий екземпляр User з усіма полями, включаючи is_blocked
+        new_user_instance = User(
             user_id=user_id,
             first_name=first_name_default,
+            last_name=tg_user_obj.last_name if tg_user_obj else None,
+            username=tg_user_obj.username if tg_user_obj else None,
             preferred_weather_service=ServiceChoice.OPENWEATHERMAP,
             preferred_alert_service=ServiceChoice.UKRAINEALARM,
-            weather_reminder_enabled=False, # Значення за замовчуванням
-            weather_reminder_time=None      # Значення за замовчуванням
+            weather_reminder_enabled=False, 
+            weather_reminder_time=None,
+            is_blocked=False # Явно встановлюємо is_blocked для нових користувачів
         )
+        # Ця функція тепер просто повертає екземпляр; додавання до сесії та коміт - відповідальність викликаючого коду.
+        # Якщо викликається з /start, new_user_instance буде додано до сесії там.
+        return new_user_instance
 
 
 @router.message(CommandStart())
@@ -74,38 +85,41 @@ async def handle_start(message: Message, session: AsyncSession, state: FSMContex
     username = user_tg.username
 
     db_user = await session.get(User, user_id)
-    needs_commit = False
+    needs_commit = False # Middleware зробить коміт
 
     if db_user:
         logger.info(f"User {user_id} ('{username or 'N/A'}') found in DB.")
+        # Оновлюємо інформацію про користувача, якщо вона змінилася
         if db_user.first_name != first_name:
             db_user.first_name = first_name
-            needs_commit = True
+            # needs_commit = True # Не потрібно, якщо middleware робить коміт
         if db_user.last_name != last_name: 
             db_user.last_name = last_name
-            needs_commit = True
+            # needs_commit = True
         if db_user.username != username:
             db_user.username = username
-            needs_commit = True
+            # needs_commit = True
         
+        # Переконуємося, що стандартні налаштування та нові поля встановлені для існуючих користувачів
         if db_user.preferred_weather_service is None:
             db_user.preferred_weather_service = ServiceChoice.OPENWEATHERMAP
-            needs_commit = True
             logger.info(f"User {user_id}: Setting default preferred_weather_service to OWM.")
         if db_user.preferred_alert_service is None:
             db_user.preferred_alert_service = ServiceChoice.UKRAINEALARM
-            needs_commit = True
             logger.info(f"User {user_id}: Setting default preferred_alert_service to UkraineAlarm.")
-        # Ініціалізація нових полів для існуючих користувачів, якщо їх немає
+        
         if not hasattr(db_user, 'weather_reminder_enabled') or db_user.weather_reminder_enabled is None:
             db_user.weather_reminder_enabled = False
-            needs_commit = True
             logger.info(f"User {user_id}: Initializing weather_reminder_enabled to False.")
-        # weather_reminder_time може бути None, це нормально, якщо нагадування вимкнені
         
-        if needs_commit:
-            logger.info(f"User {user_id}: Updating user info/default settings in DB.")
-            session.add(db_user)
+        if not hasattr(db_user, 'is_blocked') or db_user.is_blocked is None:
+            db_user.is_blocked = False # Ініціалізуємо is_blocked
+            logger.info(f"User {user_id}: Initializing is_blocked to False.")
+        
+        # if needs_commit: # Не потрібно, якщо middleware робить коміт
+        #     logger.info(f"User {user_id}: Updating user info/default settings in DB.")
+        #     session.add(db_user) 
+            # Коміт буде зроблено middleware
     else:
         logger.info(f"User {user_id} ('{username or 'N/A'}') not found. Creating new user with default service settings...")
         new_user = User(
@@ -115,10 +129,12 @@ async def handle_start(message: Message, session: AsyncSession, state: FSMContex
             username=username,
             preferred_weather_service=ServiceChoice.OPENWEATHERMAP,
             preferred_alert_service=ServiceChoice.UKRAINEALARM,
-            weather_reminder_enabled=False, # Значення за замовчуванням
-            weather_reminder_time=None      # Значення за замовчуванням
+            weather_reminder_enabled=False, 
+            weather_reminder_time=None,
+            is_blocked=False # Переконуємося, що is_blocked встановлено для нових користувачів
         )
         session.add(new_user)
+        # Коміт буде зроблено middleware
     
     text = f"Привіт, {first_name}! 👋\n\nОберіть опцію на клавіатурі нижче:"
     reply_markup = get_main_reply_keyboard()
@@ -131,6 +147,10 @@ async def handle_start(message: Message, session: AsyncSession, state: FSMContex
 @router.message(F.text == BTN_WEATHER)
 async def handle_weather_button(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
     user_settings = await _get_user_or_default_settings(session, message.from_user.id, message.from_user)
+    if user_settings.is_blocked: 
+        logger.info(f"User {message.from_user.id} is blocked. Ignoring weather request.")
+        await message.answer("Ваш обліковий запис заблоковано.")
+        return
     logger.info(f"User {message.from_user.id} pressed Weather button. Preferred service: {user_settings.preferred_weather_service}")
     if user_settings.preferred_weather_service == ServiceChoice.WEATHERAPI:
         await backup_weather_ep(message, state, session, bot)
@@ -138,14 +158,17 @@ async def handle_weather_button(message: Message, state: FSMContext, session: As
         await main_weather_ep(message, state, session, bot)
 
 @router.message(F.text == BTN_ALERTS)
-async def handle_alerts_button(message: Message, state: FSMContext, session: AsyncSession, bot: Bot): # Додано state, session для можливої передачі
+async def handle_alerts_button(message: Message, state: FSMContext, session: AsyncSession, bot: Bot): 
     user_settings = await _get_user_or_default_settings(session, message.from_user.id, message.from_user)
+    if user_settings.is_blocked: 
+        logger.info(f"User {message.from_user.id} is blocked. Ignoring alerts request.")
+        await message.answer("Ваш обліковий запис заблоковано.")
+        return
     logger.info(f"User {message.from_user.id} pressed Alerts button. Preferred service: {user_settings.preferred_alert_service}")
     if user_settings.preferred_alert_service == ServiceChoice.ALERTSINUA:
-        # backup_alert_ep може вимагати state, session, якщо його логіка зміниться
-        await backup_alert_ep(message, bot) # Поки що передаємо тільки message, bot
+        await backup_alert_ep(message, bot) 
     else: 
-        await main_alert_ep(message, bot) # Аналогічно
+        await main_alert_ep(message, bot) 
 
 @router.message(F.location)
 async def handle_any_geolocation(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
@@ -155,16 +178,21 @@ async def handle_any_geolocation(message: Message, state: FSMContext, session: A
         await message.reply("Не вдалося обробити геолокацію. Спробуйте ще раз.")
         return
 
+    user_settings = await _get_user_or_default_settings(session, user_id, message.from_user)
+    if user_settings.is_blocked: 
+        logger.info(f"User {user_id} is blocked. Ignoring geolocation request.")
+        await message.answer("Ваш обліковий запис заблоковано.")
+        return
+
     lat = message.location.latitude
     lon = message.location.longitude
-    user_settings = await _get_user_or_default_settings(session, user_id, message.from_user)
     logger.info(f"User {user_id} sent geolocation ({lat}, {lon}). Preferred weather service: {user_settings.preferred_weather_service}")
 
     current_fsm_state = await state.get_state()
     if current_fsm_state is not None:
-        logger.info(f"User {user_id}: In FSM state '{current_fsm_state}' before processing geolocation. Setting state to None.")
-        await state.set_state(None) 
-        logger.debug(f"User {user_id}: FSM state set to None after receiving geolocation.")
+        logger.info(f"User {user_id}: In FSM state '{current_fsm_state}' before processing geolocation. Clearing state.")
+        await state.clear() 
+        logger.debug(f"User {user_id}: FSM state cleared after receiving geolocation.")
 
     if user_settings.preferred_weather_service == ServiceChoice.WEATHERAPI:
         await weather_backup_geolocation_entry_point(message, state, session, bot)
@@ -173,12 +201,20 @@ async def handle_any_geolocation(message: Message, state: FSMContext, session: A
 
 
 @router.message(F.text == BTN_CURRENCY)
-async def handle_currency_text_request(message: Message, state: FSMContext, session: AsyncSession, bot: Bot): # Додано state, session
-     # currency_entry_point може не вимагати state, session, але для уніфікації можна додати
-     await currency_entry_point(message, bot) # Поки що передаємо тільки message, bot
+async def handle_currency_text_request(message: Message, state: FSMContext, session: AsyncSession, bot: Bot): 
+    user_settings = await _get_user_or_default_settings(session, message.from_user.id, message.from_user)
+    if user_settings.is_blocked: 
+        logger.info(f"User {message.from_user.id} is blocked. Ignoring currency request.")
+        await message.answer("Ваш обліковий запис заблоковано.")
+        return
+    await currency_entry_point(message, bot)
 
-# ВИПРАВЛЕНО: Додано state: FSMContext до сигнатури та передано у виклик
 @router.message(F.text == BTN_SETTINGS)
 async def handle_settings_button(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
+    user_settings = await _get_user_or_default_settings(session, message.from_user.id, message.from_user)
+    if user_settings.is_blocked: 
+        logger.info(f"User {message.from_user.id} is blocked. Ignoring settings request.")
+        await message.answer("Ваш обліковий запис заблоковано.")
+        return
     await settings_entry_point(message, session, bot, state)
-    # state передається для можливого використання в settings_entry_point
+
