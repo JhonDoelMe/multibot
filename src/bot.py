@@ -191,7 +191,12 @@ async def get_aiohttp_app() -> web.Application:
     app['dispatcher'] = dp
     app['fsm_storage'] = fsm_storage
 
-    setup_application(app, dp, bot=bot)
+    webhook_requests_handler = SimpleRequestHandler(
+        dispatcher=dp,
+        bot=bot,
+        secret_token=app_config.WEBHOOK_SECRET
+    )
+    webhook_requests_handler.register(app, path=app_config.WEBHOOK_PATH)
     logger.info(f"Webhook handler registered at: {app_config.WEBHOOK_PATH}")
     return app
 
