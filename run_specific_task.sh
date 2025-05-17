@@ -1,18 +1,15 @@
 #!/bin/bash
 
 # Shell скрипт для запуску Python-завдань через cron
-# Він активує віртуальне середовище та запускає src/__main__.py з відповідним завданням,
-# ізолюючи його файлове логування від основного логу бота.
+# Він активує віртуальне середовище, завантажує .env та запускає src/__main__.py з відповідним завданням.
 
-# --- Налаштування шляхів та імен ---
+# --- Налаштування ---
 PROJECT_ROOT_DIR="/home3/anubisua/telegram_bot"
 VENV_DIR="/home3/anubisua/virtualenv/telegram_bot/3.11"
 PYTHON_EXEC="${VENV_DIR}/bin/python3.11"
 VENV_ACTIVATE_SCRIPT="${VENV_DIR}/bin/activate"
-
 LOG_DIR="${PROJECT_ROOT_DIR}/logs_cron_tasks"
 mkdir -p "$LOG_DIR"
-
 SCRIPT_BASENAME=$(basename "$0")
 
 # --- Перевірка аргументів ---
@@ -24,37 +21,47 @@ if [ -z "$1" ]; then
     exit 1
 fi
 TASK_NAME="$1"
+CRON_JOB_LOG_FILE="${LOG_DIR}/${TASK_NAME}_task_runs.log"
 
-# Лог-файл для stdout/stderr Python-завдання ТА логів самого bash-скрипта
-# Усі логи, пов'язані з одним запуском завдання, будуть тут.
-TASK_EXECUTION_LOG_FILE="${LOG_DIR}/${TASK_NAME}_execution.log"
-
-# Ім'я файлу, куди буде писати RotatingFileHandler всередині Python-завдання
-PYTHON_TASK_SPECIFIC_FILE_LOG="${LOG_DIR}/${TASK_NAME}_python_file.log"
-
-# --- Функція для логування дій цього bash-скрипта ---
 log_action() {
-    echo "$(date '+%Y-%m-%d %H:%M:%S %Z') - ${SCRIPT_BASENAME} (Task: ${TASK_NAME}): $1" >> "$TASK_EXECUTION_LOG_FILE"
+    echo "$(date '+%Y-%m-%d %H:%M:%S %Z') - ${SCRIPT_BASENAME} (Task: ${TASK_NAME}): $1" >> "$CRON_JOB_LOG_FILE"
 }
 
-# --- Початок роботи скрипта ---
-echo "-------------------- TASK RUN AT $(date '+%Y-%m-%d %H:%M:%S %Z') --------------------" >> "$TASK_EXECUTION_LOG_FILE"
+echo "-------------------- TASK RUN AT $(date '+%Y-%m-%d %H:%M:%S %Z') --------------------" >> "$CRON_JOB_LOG_FILE"
 log_action "Script instance started to execute task: '${TASK_NAME}'"
-log_action "Python FileHandler will write to: ${PYTHON_TASK_SPECIFIC_FILE_LOG}"
-log_action "Shell script actions and Python stdout/stderr will be in: ${TASK_EXECUTION_LOG_FILE}"
-
 
 # 1. Перехід в кореневу директорію проекту
 log_action "Changing current directory to ${PROJECT_ROOT_DIR}..."
 cd "$PROJECT_ROOT_DIR"
 if [ $? -ne 0 ]; then
     log_action "FATAL ERROR: Failed to change directory to ${PROJECT_ROOT_DIR}. Exiting."
-    echo "-------------------- SCRIPT END (FATAL ERROR) --------------------" >> "$TASK_EXECUTION_LOG_FILE"
+    echo "-------------------- SCRIPT END (FATAL ERROR) --------------------" >> "$CRON_JOB_LOG_FILE"
     exit 1
 fi
-log_action "Successfully changed current directory to: $(pwd)"
+log_action "Current directory: $(pwd)"
 
-# 2. Активація віртуального середовища
+# 2. Явне завантаження змінних з .env файлу (якщо він існує)
+ENV_FILE="${PROJECT_ROOT_DIR}/.env"
+if [ -f "$ENV_FILE" ]; then
+    log_action "Sourcing environment variables from ${ENV_FILE}..."
+    # Використовуємо `set -a` для автоматичного експорту всіх змінних, визначених у .env
+    # та `set +a` для вимкнення цього режиму після.
+    # Переконуємося, що .env файл не містить складних команд, а лише пари КЛЮЧ=ЗНАЧЕННЯ.
+    # Видаляємо коментарі та порожні рядки перед сорсингом.
+    # Важливо: цей метод може мати проблеми з багаторядковими змінними або спеціальними символами.
+    # Для простих .env файлів він має працювати.
+    # Альтернатива - використовувати `export $(grep -v '^#' $ENV_FILE | xargs)` але це теж має обмеження.
+    # Найпростіший варіант, якщо .env простий:
+    set -a # Automatically export all variables
+    source "$ENV_FILE"
+    set +a # Disable auto-export
+    log_action ".env file sourced. DATABASE_URL from env (if set): $DATABASE_URL" 
+    # $DATABASE_URL тут покаже значення, яке тепер є в оточенні bash
+else
+    log_action "WARNING: .env file not found at ${ENV_FILE}. Python script will rely on globally set environment variables or defaults."
+fi
+
+# 3. Активація віртуального середовища
 if [ -f "$VENV_ACTIVATE_SCRIPT" ]; then
     log_action "Activating virtual environment: ${VENV_ACTIVATE_SCRIPT}..."
     source "$VENV_ACTIVATE_SCRIPT"
@@ -67,16 +74,11 @@ else
     log_action "WARNING: Virtual environment activation script not found at ${VENV_ACTIVATE_SCRIPT}."
 fi
 
-# 3. Встановлюємо змінну оточення LOG_FILENAME для Python-скрипта
-export LOG_FILENAME="${PYTHON_TASK_SPECIFIC_FILE_LOG}"
-log_action "Exported LOG_FILENAME=${LOG_FILENAME} for Python process."
-
 # 4. Запуск Python-завдання
 log_action "Executing Python task command: ${PYTHON_EXEC} -m src --task=${TASK_NAME}"
 log_action "--- Python Task Output (stdout & stderr) START ---"
 
-# Виконуємо Python-завдання. Його stdout та stderr будуть додані до $TASK_EXECUTION_LOG_FILE
-"$PYTHON_EXEC" -m src --task="$TASK_NAME" >> "$TASK_EXECUTION_LOG_FILE" 2>&1
+"$PYTHON_EXEC" -m src --task="$TASK_NAME" >> "$CRON_JOB_LOG_FILE" 2>&1
 PYTHON_TASK_EXIT_CODE=$?
 
 log_action "--- Python Task Output (stdout & stderr) END ---"
@@ -93,12 +95,9 @@ if type deactivate > /dev/null 2>&1 && [ -n "$VIRTUAL_ENV" ]; then
     deactivate
 fi
 
-# Скасовуємо експорт змінної, хоча для cron-сесії це зазвичай не потрібно
-unset LOG_FILENAME
-
 log_action "Script instance finished with overall exit code ${PYTHON_TASK_EXIT_CODE}."
-echo "-------------------- SCRIPT END (EXIT CODE: ${PYTHON_TASK_EXIT_CODE}) --------------------" >> "$TASK_EXECUTION_LOG_FILE"
-echo "" >> "$TASK_EXECUTION_LOG_FILE"
+echo "-------------------- SCRIPT END (EXIT CODE: ${PYTHON_TASK_EXIT_CODE}) --------------------" >> "$CRON_JOB_LOG_FILE"
+echo "" >> "$CRON_JOB_LOG_FILE"
 
 exit $PYTHON_TASK_EXIT_CODE
 # Кінець скрипта
