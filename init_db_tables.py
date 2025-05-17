@@ -4,29 +4,32 @@ import logging
 import os
 import sys
 
-# Додаємо шлях до src, щоб можна було імпортувати модулі звідти,
-# якщо скрипт запускається з кореневої директорії проекту.
-# Це потрібно, якщо ви запускаєте `python init_db_tables.py` з кореня.
-# Якщо ви запускаєте як модуль `python -m init_db_tables` (і він у src), то це не потрібно.
-# Для простоти, припустимо, що він в корені, і src поруч.
-current_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = current_dir # Якщо скрипт в корені
-# Якщо скрипт в піддиректорії scripts:
-# project_root = os.path.dirname(current_dir) 
-if project_root not in sys.path:
+# Налаштування шляхів для коректного імпорту з src,
+# коли скрипт запускається з кореневої директорії проєкту.
+current_script_path = os.path.dirname(os.path.abspath(__file__))
+# Якщо init_db_tables.py знаходиться в корені проєкту, то project_root = current_script_path
+# Якщо init_db_tables.py знаходиться в /src, то project_root = os.path.dirname(current_script_path)
+# Припускаємо, що init_db_tables.py знаходиться в КОРЕНЕВІЙ директорії проєкту.
+project_root = current_script_path 
+src_dir_path = os.path.join(project_root, "src")
+
+if src_dir_path not in sys.path:
+    sys.path.insert(0, src_dir_path)
+if project_root not in sys.path: # Якщо сам корінь ще не в sys.path
     sys.path.insert(0, project_root)
+
 
 # Тепер можна імпортувати з src
 from src import config as app_config # Завантажуємо конфігурацію
 from src.db.database import engine, Base # Імпортуємо engine та Base
-from src.db.models import User # Імпортуємо ваші моделі, щоб вони були зареєстровані в Base.metadata
+from src.db.models import User # Імпортуємо ваші моделі
 
 # Налаштування базового логування для цього скрипта
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(name)s - %(message)s',
+    format='%(asctime)s - %(levelname)s - %(name)s - %(module)s:%(lineno)d - %(message)s',
     handlers=[
-        logging.StreamHandler(sys.stdout)
+        logging.StreamHandler(sys.stdout) # Виводимо логи в stdout
     ]
 )
 logger = logging.getLogger(__name__)
@@ -34,53 +37,53 @@ logger = logging.getLogger(__name__)
 async def create_tables():
     """
     Асинхронна функція для створення всіх таблиць, визначених у Base.metadata.
+    Якщо розкоментовано drop_all, то існуючі таблиці будуть видалені перед створенням.
     """
     if not app_config.DATABASE_URL:
         logger.error("DATABASE_URL is not set in the environment/config. Cannot create tables.")
         return
 
-    logger.info(f"Attempting to connect to database: {app_config.DATABASE_URL.split('@')[-1] if '@' in app_config.DATABASE_URL else app_config.DATABASE_URL}") # Показуємо частину URL без пароля
+    # Логуємо URL бази даних (без облікових даних, якщо вони є)
+    db_url_display = app_config.DATABASE_URL
+    if '@' in db_url_display:
+        db_url_display = db_url_display.split('@', 1)[-1]
+    logger.info(f"Attempting to connect to database: {db_url_display}")
     
-    # Переконуємося, що всі моделі імпортовані до виклику create_all,
-    # щоб SQLAlchemy знав про них. Імпорт User вище це забезпечує.
-    # Якщо у вас є інші моделі, їх також потрібно імпортувати.
-
     try:
         async with engine.begin() as conn:
-            logger.info("Dropping all existing tables (if any)...") # Опціонально: для чистого створення
-            # УВАГА: Наступні два рядки ВИДАЛЯТЬ ВСІ ІСНУЮЧІ ТАБЛИЦІ перед створенням нових.
-            # Закоментуйте їх, якщо ви не хочете видаляти дані, а лише створити відсутні таблиці.
-            # await conn.run_sync(Base.metadata.drop_all)
-            # logger.info("Existing tables dropped.")
+            logger.warning("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+            logger.warning("!!! ATTENTION: DROPPING ALL EXISTING TABLES (if configured)!!!")
+            logger.warning("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+            
+            # Розкоментуйте наступний рядок, щоб ВИДАЛИТИ всі існуючі таблиці перед створенням нових.
+            # ЦЕ ПРИЗВЕДЕ ДО ВТРАТИ ВСІХ ДАНИХ В ЦИХ ТАБЛИЦЯХ!
+            await conn.run_sync(Base.metadata.drop_all) # <--- РОЗКОМЕНТОВАНО ДЛЯ ВИДАЛЕННЯ
+            logger.info("Existing tables dropped successfully.")
 
             logger.info("Creating database tables based on models...")
             await conn.run_sync(Base.metadata.create_all)
-            logger.info("Database tables checked/created successfully!")
+            logger.info("Database tables created successfully!")
             
-            # Додаткова перевірка (опціонально)
-            # Можна спробувати зробити простий запит, щоб переконатися, що таблиця users існує
-            # from sqlalchemy import text
-            # result = await conn.execute(text("SELECT COUNT(*) FROM users"))
-            # logger.info(f"Test query: Found {result.scalar_one_or_none()} rows in users table (should be 0 if just created).")
-
     except ConnectionRefusedError:
-        logger.error(f"Database connection refused. Ensure the database server is running and accessible at {app_config.DATABASE_URL}.")
+        logger.error(f"Database connection refused. Ensure the database server is running and accessible at the configured DATABASE_URL.")
     except Exception as e:
         logger.exception("An error occurred during table creation:", exc_info=e)
     finally:
-        # Закриваємо з'єднання двигуна, якщо воно було відкрито
-        await engine.dispose()
-        logger.info("Database engine disposed.")
+        if engine: # Перевірка, чи engine взагалі було створено
+            await engine.dispose()
+            logger.info("Database engine disposed.")
 
 if __name__ == "__main__":
-    logger.info("Starting database table creation script...")
-    # Завантажуємо конфігурацію (це вже зроблено на рівні модуля, але для ясності)
-    if not app_config.BOT_TOKEN: # Проста перевірка, що конфіг завантажився
-        logger.warning("App config might not be loaded correctly (BOT_TOKEN is missing).")
+    logger.info("Starting database table (re)creation script...")
+    
+    # Перевірка завантаження конфігурації
+    if not hasattr(app_config, 'BOT_TOKEN') or not app_config.BOT_TOKEN: 
+        logger.warning("App config might not be loaded correctly (BOT_TOKEN is missing or None).")
+    if not hasattr(app_config, 'DATABASE_URL') or not app_config.DATABASE_URL:
+        logger.error("CRITICAL: DATABASE_URL is not configured. Cannot proceed with table creation.")
+        sys.exit(1) # Виходимо, якщо немає DATABASE_URL
     
     asyncio.run(create_tables())
-    logger.info("Database table creation script finished.")
+    logger.info("Database table (re)creation script finished.")
 
-# Додаткові коментарі:
-# Цей скрипт створює таблиці бази даних на основі моделей SQLAlchemy.
-# Перед запуском переконайтеся, що DATABASE_URL налаштовано правильно.
+# Виводимо повідомлення про завершення
