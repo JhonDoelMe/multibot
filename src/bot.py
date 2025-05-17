@@ -10,7 +10,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
 from aiogram.client.bot import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
-from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application # setup_application може знадобитися
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web 
 from aiogram.exceptions import TelegramNetworkError, TelegramAPIError, TelegramRetryAfter
 
@@ -19,7 +19,6 @@ from aiogram.fsm.storage.redis import RedisStorage
 import redis 
 from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession 
 
-# Використовуємо абсолютні імпорти відносно кореня проєкту (де знаходиться src)
 from src import config as app_config 
 from src.db.database import initialize_database 
 from src.middlewares.db_session import DbSessionMiddleware
@@ -106,40 +105,30 @@ async def on_bot_shutdown(bot: Optional[Bot], fsm_storage_instance: Optional[Uni
             logger.info("RedisStorage instance found, but no active Redis connection to close (or 'redis' attribute missing).")
     logger.warning("Bot shutdown actions complete.")
 
-
-async def create_bot_dispatcher_and_fsm_storage(
-    session_factory_param: Optional[async_sessionmaker[AsyncSession]] 
-) -> tuple[Optional[Bot], Optional[Dispatcher], Optional[Union[MemoryStorage, RedisStorage]], Optional[AiohttpSession]]:
+async def create_bot_dispatcher_and_fsm_storage(session_factory_param: Optional[async_sessionmaker[AsyncSession]]) -> tuple[Optional[Bot], Optional[Dispatcher], Optional[Union[MemoryStorage, RedisStorage]], Optional[AiohttpSession]]:
     fsm_storage: Optional[Union[MemoryStorage, RedisStorage]] = None
     if app_config.FSM_STORAGE_TYPE == "redis":
         if app_config.FSM_REDIS_URL:
             try:
                 temp_redis_storage = RedisStorage.from_url(app_config.FSM_REDIS_URL)
                 if hasattr(temp_redis_storage, 'redis') and temp_redis_storage.redis:
-                    await temp_redis_storage.redis.ping() 
+                    await temp_redis_storage.redis.ping()
                 fsm_storage = temp_redis_storage
                 logger.info(f"Successfully connected to Redis for FSM states (URL: {app_config.FSM_REDIS_URL}). Using RedisStorage.")
             except redis.exceptions.ConnectionError as e_conn:
-                logger.warning(
-                    f"Could not connect to Redis for FSM storage (URL: {app_config.FSM_REDIS_URL}): {e_conn}. "
-                    f"Falling back to MemoryStorage."
-                )
+                logger.warning(f"Could not connect to Redis for FSM storage (URL: {app_config.FSM_REDIS_URL}): {e_conn}. Falling back to MemoryStorage.")
                 fsm_storage = MemoryStorage()
             except Exception as e_redis_other:
-                logger.error(
-                    f"An unexpected error occurred while initializing RedisStorage "
-                    f"(URL: {app_config.FSM_REDIS_URL}): {e_redis_other}. Falling back to MemoryStorage.",
-                    exc_info=True
-                )
+                logger.error(f"Unexpected error during RedisStorage init: {e_redis_other}. Falling back to MemoryStorage.", exc_info=True)
                 fsm_storage = MemoryStorage()
         else:
             logger.warning("FSM_STORAGE_TYPE is 'redis' but FSM_REDIS_URL is not set. Falling back to MemoryStorage.")
             fsm_storage = MemoryStorage()
-    
-    if fsm_storage is None: 
+
+    if fsm_storage is None:
         fsm_storage = MemoryStorage()
-        logger.info("Using MemoryStorage for FSM states (default or due to Redis config/connection issues).")
-    
+        logger.info("Using MemoryStorage for FSM states.")
+
     aio_session = AiohttpSession()
     logger.info("AiohttpSession initialized for bot.")
 
@@ -147,7 +136,7 @@ async def create_bot_dispatcher_and_fsm_storage(
     bot_instance = Bot(
         token=app_config.BOT_TOKEN,
         default=default_props,
-        session=aio_session, 
+        session=aio_session,
         request_timeout=app_config.API_REQUEST_TIMEOUT
     )
     logger.info(f"Aiogram Bot object initialized. Default request_timeout: {app_config.API_REQUEST_TIMEOUT}s.")
@@ -159,12 +148,12 @@ async def create_bot_dispatcher_and_fsm_storage(
         dp.update.outer_middleware(DbSessionMiddleware(session_pool=session_factory_param))
         logger.info("Database session middleware registered.")
     else:
-        logger.warning("session_factory_param is None. Database session middleware skipped. Ensure initialize_database() returned a valid factory if DB is needed.")
-    
+        logger.warning("session_factory_param is None. Skipping DB middleware.")
+
     dp.update.outer_middleware(ThrottlingMiddleware(default_rate=app_config.THROTTLING_RATE_DEFAULT))
     logger.info(f"Throttling middleware registered with rate: {app_config.THROTTLING_RATE_DEFAULT}s.")
 
-    logger.info("Registering routers for Dispatcher...")
+    logger.info("Registering routers...")
     dp.include_router(settings_handlers.router)
     dp.include_router(weather_handlers.router)
     dp.include_router(weather_backup_handlers.router)
@@ -172,124 +161,83 @@ async def create_bot_dispatcher_and_fsm_storage(
     dp.include_router(alert_handlers.router)
     dp.include_router(alert_backup_handlers.router)
     dp.include_router(common_handlers.router)
-    logger.info("All routers registered for Dispatcher.")
-    
-    return bot_instance, dp, fsm_storage, aio_session
+    logger.info("All routers registered.")
 
+    return bot_instance, dp, fsm_storage, aio_session
 
 async def get_aiohttp_app() -> web.Application:
     logger.info("get_aiohttp_app: Initializing database...")
-    db_initialized, session_factory = await initialize_database() 
+    db_initialized, session_factory = await initialize_database()
     if not db_initialized and app_config.DATABASE_URL:
-        logger.critical("get_aiohttp_app: Database initialization failed! Webhook app cannot start properly.")
-        raise RuntimeError("Database failed to initialize for webhook application")
-    elif not app_config.DATABASE_URL:
-        logger.warning("get_aiohttp_app: DATABASE_URL is not set. DB features will be disabled.")
-    else:
-        logger.info("get_aiohttp_app: Database initialization successful.")
+        logger.critical("Database initialization failed!")
+        raise RuntimeError("Database init failed")
 
-    logger.info("get_aiohttp_app: Creating Bot, Dispatcher, and FSM Storage...")
-    bot, dp, fsm_storage, _ = await create_bot_dispatcher_and_fsm_storage(session_factory_param=session_factory) 
-
+    bot, dp, fsm_storage, _ = await create_bot_dispatcher_and_fsm_storage(session_factory_param=session_factory)
     if not bot or not dp:
-        logger.critical("get_aiohttp_app: Bot or Dispatcher is not initialized. Webhook app cannot start.")
-        raise RuntimeError("Bot or Dispatcher failed to initialize for webhook application")
+        logger.critical("Bot or Dispatcher init failed.")
+        raise RuntimeError("Bot init failed")
 
-    dp.startup.register(lambda: on_bot_startup(bot, dp, base_url=app_config.WEBHOOK_BASE_URL))
-    dp.shutdown.register(lambda: on_bot_shutdown(bot, fsm_storage_instance=fsm_storage))
+    async def startup_callback():
+        await on_bot_startup(bot, dp, base_url=app_config.WEBHOOK_BASE_URL)
+
+    async def shutdown_callback():
+        await on_bot_shutdown(bot, fsm_storage_instance=fsm_storage)
+
+    dp.startup.register(startup_callback)
+    dp.shutdown.register(shutdown_callback)
 
     app = web.Application()
-    # Зберігаємо екземпляри в додатку, щоб вони були доступні в on_startup/on_shutdown самого aiohttp app, якщо потрібно
-    app['bot_instance'] = bot 
+    app['bot_instance'] = bot
     app['dispatcher'] = dp
-    app['fsm_storage'] = fsm_storage # Може знадобитися для on_shutdown додатка
+    app['fsm_storage'] = fsm_storage
 
-    # Використовуємо хелпер aiogram для налаштування додатка для вебхуків
-    # Це реєструє SimpleRequestHandler та обробники startup/shutdown для dp
-    setup_application(app, dp, bot=bot) # Передаємо bot сюди
-    logger.info(f"get_aiohttp_app: aiogram setup_application complete. Webhook handler should be registered at path: {app_config.WEBHOOK_PATH}")
-    
-    # Ручна реєстрація SimpleRequestHandler (альтернатива setup_application, якщо потрібен більший контроль)
-    # webhook_requests_handler = SimpleRequestHandler(
-    #     dispatcher=dp,
-    #     bot=bot,
-    #     secret_token=app_config.WEBHOOK_SECRET
-    # )
-    # webhook_requests_handler.register(app, path=app_config.WEBHOOK_PATH)
-    # logger.info(f"get_aiohttp_app: Registered webhook handler at path: {app_config.WEBHOOK_PATH}")
-    
-    logger.info("get_aiohttp_app: aiohttp Application setup for webhook complete.")
+    setup_application(app, dp, bot=bot)
+    logger.info(f"Webhook handler registered at: {app_config.WEBHOOK_PATH}")
     return app
-
 
 async def main_polling():
     logger.info("main_polling: Initializing database...")
-    db_initialized, session_factory = await initialize_database() 
+    db_initialized, session_factory = await initialize_database()
     if not db_initialized and app_config.DATABASE_URL:
-        logger.critical("main_polling: Database initialization failed! Polling cannot start properly.")
+        logger.critical("Polling mode: database init failed")
         return
-    elif not app_config.DATABASE_URL:
-        logger.warning("main_polling: DATABASE_URL is not set. DB features will be disabled.")
-    else:
-        logger.info("main_polling: Database initialization successful.")
 
-    logger.info("main_polling: Creating Bot, Dispatcher, and FSM Storage...")
-    bot, dp, fsm_storage, bot_aio_session = await create_bot_dispatcher_and_fsm_storage(session_factory_param=session_factory)
+    bot, dp, fsm_storage, aio_session = await create_bot_dispatcher_and_fsm_storage(session_factory_param=session_factory)
 
     if not bot or not dp:
-        logger.critical("main_polling: Bot or Dispatcher is not initialized. Polling cannot start.")
-        if bot_aio_session and hasattr(bot_aio_session, 'closed') and not bot_aio_session.closed:
-            await bot_aio_session.close()
-        if isinstance(fsm_storage, RedisStorage) and hasattr(fsm_storage, 'redis') and fsm_storage.redis:
-            await fsm_storage.close()
+        logger.critical("Polling mode: Bot or Dispatcher init failed")
         return
 
-    # Реєструємо on_bot_startup/on_bot_shutdown для полінгу
-    dp.startup.register(lambda: on_bot_startup(bot, dp))
-    dp.shutdown.register(lambda: on_bot_shutdown(bot, fsm_storage_instance=fsm_storage))
-    
     try:
-        # on_bot_startup тепер викликається через dp.startup.register
-        logger.warning("main_polling: Starting bot in POLLING mode...")
+        await on_bot_startup(bot, dp)
+        logger.warning("Starting bot in POLLING mode...")
         await dp.start_polling(
             bot,
             allowed_updates=dp.resolve_used_update_types(),
-            polling_timeout=30 
+            polling_timeout=30
         )
     except Exception as e:
-        logger.critical(f"Critical error during polling: {e}", exc_info=True)
+        logger.critical(f"Critical error in polling: {e}", exc_info=True)
     finally:
-        logger.warning("main_polling: Closing bot session and FSM storage (on_bot_shutdown will be called by dispatcher)...")
-        # on_bot_shutdown тепер викликається через dp.shutdown.register
-        # Додаткове закриття bot_aio_session, якщо він не переданий в bot.session
-        if bot_aio_session and bot.session != bot_aio_session:
-             if hasattr(bot_aio_session, 'closed') and not bot_aio_session.closed:
-                 await bot_aio_session.close()
-                 logger.info("Main polling aiohttp session (if separate) closed.")
+        logger.warning("Polling: shutting down...")
+        await on_bot_shutdown(bot, fsm_storage_instance=fsm_storage)
+        if aio_session and hasattr(aio_session, 'closed') and not aio_session.closed:
+            await aio_session.close()
 
 async def main():
     if app_config.RUN_WITH_WEBHOOK:
-        logger.warning("Running with WEBHOOK configuration. This main() function will setup and run the aiohttp server.")
-        logger.warning("Ensure this is run by a process manager or directly if not using Passenger/uWSGI/etc.")
+        logger.warning("main(): running in WEBHOOK mode")
         app = await get_aiohttp_app()
-        
-        # on_startup та on_shutdown для aiohttp додатку, які викликають функції бота
-        # dp.startup.register та dp.shutdown.register вже налаштовані в get_aiohttp_app
-        # Тому тут не потрібно окремо їх реєструвати для app, setup_application це робить
-        
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, host=app_config.WEBAPP_HOST, port=app_config.WEBAPP_PORT)
         try:
             await site.start()
-            logger.info(f"Web server started successfully on {app_config.WEBAPP_HOST}:{app_config.WEBAPP_PORT} for webhook.")
-            logger.info("Bot is up and running in webhook mode! Waiting for requests...")
-            await asyncio.Event().wait() 
+            logger.info(f"aiohttp server started at {app_config.WEBAPP_HOST}:{app_config.WEBAPP_PORT}")
+            await asyncio.Event().wait()
         except Exception as e:
-            logger.critical(f"Error starting or running webhook server: {e}", exc_info=True)
+            logger.critical(f"aiohttp server error: {e}", exc_info=True)
         finally:
-            logger.warning("Webhook server shutting down...")
             await runner.cleanup()
-            logger.info("Webhook server runner cleaned up.")
     else:
         await main_polling()
