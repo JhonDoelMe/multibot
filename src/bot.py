@@ -18,6 +18,7 @@ from aiogram.exceptions import TelegramNetworkError, TelegramAPIError, TelegramR
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.storage.redis import RedisStorage
 # from aiogram.fsm.storage.redis import DefaultKeyBuilder as RedisKeyBuilder # Якщо потрібен кастомний префікс
+import redis # <--- ДОДАНО ІМПОРТ REDIS
 
 from src import config as app_config # Використовуємо псевдонім
 from src.db.database import initialize_database
@@ -117,35 +118,46 @@ async def main() -> None:
         logger.info("Initializing Aiogram components...")
         
         # --- Налаштування сховища FSM ---
+        fsm_storage = None # Ініціалізуємо None
         if app_config.FSM_STORAGE_TYPE == "redis":
             if app_config.FSM_REDIS_URL:
                 try:
-                    # from redis.asyncio import Redis # Можна імпортувати, якщо потрібен сам клієнт
-                    # redis_client = Redis.from_url(app_config.FSM_REDIS_URL)
-                    # fsm_storage = RedisStorage(redis=redis_client)
-                    # Або простіше через from_url самого RedisStorage:
-                    fsm_storage = RedisStorage.from_url(app_config.FSM_REDIS_URL)
+                    # Спроба створити екземпляр RedisStorage
+                    temp_redis_storage = RedisStorage.from_url(app_config.FSM_REDIS_URL)
                     
-                    # Спроба перевірити з'єднання (опціонально, але корисно для відладки)
-                    # Це потребує, щоб `fsm_storage.redis` був доступний і мав метод `ping`
-                    if hasattr(fsm_storage, 'redis') and fsm_storage.redis:
-                        await fsm_storage.redis.ping() # Тестовий запит до Redis
-                        logger.info(f"Successfully connected to Redis for FSM states (URL: {app_config.FSM_REDIS_URL}). Using RedisStorage.")
-                    else: # Якщо ping неможливий, але сховище створено
-                        logger.info(f"Using RedisStorage for FSM states (URL: {app_config.FSM_REDIS_URL}). Ping check skipped or 'redis' attribute not available on storage.")
+                    # Виконати швидку перевірку з'єднання (ping).
+                    # Це може викликати ConnectionError, якщо Redis недоступний.
+                    if hasattr(temp_redis_storage, 'redis') and temp_redis_storage.redis:
+                        await temp_redis_storage.redis.ping() 
+                    
+                    # Якщо from_url та ping (якщо виконано) успішні, використовуємо RedisStorage
+                    fsm_storage = temp_redis_storage
+                    logger.info(f"Successfully connected to Redis for FSM states (URL: {app_config.FSM_REDIS_URL}). Using RedisStorage.")
 
-                except ConnectionRefusedError as e_redis_conn:
-                    logger.error(f"Redis connection refused for FSM storage (URL: {app_config.FSM_REDIS_URL}): {e_redis_conn}. Falling back to MemoryStorage.")
+                except redis.exceptions.ConnectionError as e_conn:
+                    # Ловимо помилки з'єднання від from_url або ping
+                    logger.warning(
+                        f"Could not connect to Redis for FSM storage (URL: {app_config.FSM_REDIS_URL}): {e_conn}. "
+                        f"Falling back to MemoryStorage."
+                    )
                     fsm_storage = MemoryStorage()
-                except Exception as e_redis: # Будь-які інші помилки при ініціалізації RedisStorage
-                    logger.exception(f"Failed to initialize RedisStorage (URL: {app_config.FSM_REDIS_URL}): {e_redis}. Falling back to MemoryStorage.", exc_info=True)
+                except Exception as e_redis_other:
+                    # Ловимо інші неочікувані помилки під час ініціалізації RedisStorage
+                    logger.error(
+                        f"An unexpected error occurred while initializing RedisStorage "
+                        f"(URL: {app_config.FSM_REDIS_URL}): {e_redis_other}. Falling back to MemoryStorage.",
+                        exc_info=True # Залишаємо exc_info для справді неочікуваних помилок
+                    )
                     fsm_storage = MemoryStorage()
             else:
                 logger.warning("FSM_STORAGE_TYPE is 'redis' but FSM_REDIS_URL is not set. Falling back to MemoryStorage.")
                 fsm_storage = MemoryStorage()
-        else: 
+        
+        # Якщо Redis не було налаштовано або сталася помилка, fsm_storage буде MemoryStorage.
+        # Якщо FSM_STORAGE_TYPE спочатку не був 'redis':
+        if fsm_storage is None: 
             fsm_storage = MemoryStorage()
-            logger.info("Using MemoryStorage for FSM states.")
+            logger.info("Using MemoryStorage for FSM states (default or due to Redis config/connection issues).")
         
         aio_session = AiohttpSession() 
         logger.info("AiohttpSession initialized.")
