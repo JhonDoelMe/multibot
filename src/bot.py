@@ -10,17 +10,18 @@ from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
 from aiogram.client.bot import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
-from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application # setup_application може знадобитися
 from aiohttp import web 
 from aiogram.exceptions import TelegramNetworkError, TelegramAPIError, TelegramRetryAfter
 
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.storage.redis import RedisStorage
 import redis 
-from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession # <--- Додано для підказки типу
+from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession 
 
+# Використовуємо абсолютні імпорти відносно кореня проєкту (де знаходиться src)
 from src import config as app_config 
-from src.db.database import initialize_database # async_session_factory більше не імпортується напряму тут
+from src.db.database import initialize_database 
 from src.middlewares.db_session import DbSessionMiddleware
 from src.middlewares.rate_limit import ThrottlingMiddleware
 
@@ -107,13 +108,8 @@ async def on_bot_shutdown(bot: Optional[Bot], fsm_storage_instance: Optional[Uni
 
 
 async def create_bot_dispatcher_and_fsm_storage(
-    session_factory_param: Optional[async_sessionmaker[AsyncSession]] # <--- Новий параметр
+    session_factory_param: Optional[async_sessionmaker[AsyncSession]] 
 ) -> tuple[Optional[Bot], Optional[Dispatcher], Optional[Union[MemoryStorage, RedisStorage]], Optional[AiohttpSession]]:
-    """
-    Creates and configures Bot, Dispatcher, and FSM Storage.
-    Accepts an optional session_factory_param.
-    Returns: (bot, dispatcher, fsm_storage, aio_session)
-    """
     fsm_storage: Optional[Union[MemoryStorage, RedisStorage]] = None
     if app_config.FSM_STORAGE_TYPE == "redis":
         if app_config.FSM_REDIS_URL:
@@ -159,7 +155,6 @@ async def create_bot_dispatcher_and_fsm_storage(
     dp = Dispatcher(storage=fsm_storage)
     logger.info(f"Aiogram Dispatcher initialized with storage: {type(fsm_storage).__name__}.")
 
-    # Використовуємо переданий session_factory_param
     if session_factory_param: 
         dp.update.outer_middleware(DbSessionMiddleware(session_pool=session_factory_param))
         logger.info("Database session middleware registered.")
@@ -183,11 +178,8 @@ async def create_bot_dispatcher_and_fsm_storage(
 
 
 async def get_aiohttp_app() -> web.Application:
-    """
-    Creates and returns the configured aiohttp.web.Application for webhook.
-    """
     logger.info("get_aiohttp_app: Initializing database...")
-    db_initialized, session_factory = await initialize_database() # Отримуємо session_factory
+    db_initialized, session_factory = await initialize_database() 
     if not db_initialized and app_config.DATABASE_URL:
         logger.critical("get_aiohttp_app: Database initialization failed! Webhook app cannot start properly.")
         raise RuntimeError("Database failed to initialize for webhook application")
@@ -197,7 +189,6 @@ async def get_aiohttp_app() -> web.Application:
         logger.info("get_aiohttp_app: Database initialization successful.")
 
     logger.info("get_aiohttp_app: Creating Bot, Dispatcher, and FSM Storage...")
-    # Передаємо отриману session_factory
     bot, dp, fsm_storage, _ = await create_bot_dispatcher_and_fsm_storage(session_factory_param=session_factory) 
 
     if not bot or not dp:
@@ -208,24 +199,32 @@ async def get_aiohttp_app() -> web.Application:
     dp.shutdown.register(lambda: on_bot_shutdown(bot, fsm_storage_instance=fsm_storage))
 
     app = web.Application()
-    app["bot"] = bot 
+    # Зберігаємо екземпляри в додатку, щоб вони були доступні в on_startup/on_shutdown самого aiohttp app, якщо потрібно
+    app['bot_instance'] = bot 
+    app['dispatcher'] = dp
+    app['fsm_storage'] = fsm_storage # Може знадобитися для on_shutdown додатка
+
+    # Використовуємо хелпер aiogram для налаштування додатка для вебхуків
+    # Це реєструє SimpleRequestHandler та обробники startup/shutdown для dp
+    setup_application(app, dp, bot=bot) # Передаємо bot сюди
+    logger.info(f"get_aiohttp_app: aiogram setup_application complete. Webhook handler should be registered at path: {app_config.WEBHOOK_PATH}")
     
-    webhook_requests_handler = SimpleRequestHandler(
-        dispatcher=dp,
-        bot=bot,
-        secret_token=app_config.WEBHOOK_SECRET
-    )
-    webhook_requests_handler.register(app, path=app_config.WEBHOOK_PATH)
-    logger.info(f"get_aiohttp_app: Registered webhook handler at path: {app_config.WEBHOOK_PATH}")
+    # Ручна реєстрація SimpleRequestHandler (альтернатива setup_application, якщо потрібен більший контроль)
+    # webhook_requests_handler = SimpleRequestHandler(
+    #     dispatcher=dp,
+    #     bot=bot,
+    #     secret_token=app_config.WEBHOOK_SECRET
+    # )
+    # webhook_requests_handler.register(app, path=app_config.WEBHOOK_PATH)
+    # logger.info(f"get_aiohttp_app: Registered webhook handler at path: {app_config.WEBHOOK_PATH}")
     
     logger.info("get_aiohttp_app: aiohttp Application setup for webhook complete.")
     return app
 
 
 async def main_polling():
-    """Main function to run the bot in polling mode."""
     logger.info("main_polling: Initializing database...")
-    db_initialized, session_factory = await initialize_database() # Отримуємо session_factory
+    db_initialized, session_factory = await initialize_database() 
     if not db_initialized and app_config.DATABASE_URL:
         logger.critical("main_polling: Database initialization failed! Polling cannot start properly.")
         return
@@ -235,7 +234,6 @@ async def main_polling():
         logger.info("main_polling: Database initialization successful.")
 
     logger.info("main_polling: Creating Bot, Dispatcher, and FSM Storage...")
-    # Передаємо отриману session_factory
     bot, dp, fsm_storage, bot_aio_session = await create_bot_dispatcher_and_fsm_storage(session_factory_param=session_factory)
 
     if not bot or not dp:
@@ -246,8 +244,12 @@ async def main_polling():
             await fsm_storage.close()
         return
 
+    # Реєструємо on_bot_startup/on_bot_shutdown для полінгу
+    dp.startup.register(lambda: on_bot_startup(bot, dp))
+    dp.shutdown.register(lambda: on_bot_shutdown(bot, fsm_storage_instance=fsm_storage))
+    
     try:
-        await on_bot_startup(bot, dp) 
+        # on_bot_startup тепер викликається через dp.startup.register
         logger.warning("main_polling: Starting bot in POLLING mode...")
         await dp.start_polling(
             bot,
@@ -257,8 +259,9 @@ async def main_polling():
     except Exception as e:
         logger.critical(f"Critical error during polling: {e}", exc_info=True)
     finally:
-        logger.warning("main_polling: Closing bot session and FSM storage...")
-        await on_bot_shutdown(bot, fsm_storage_instance=fsm_storage)
+        logger.warning("main_polling: Closing bot session and FSM storage (on_bot_shutdown will be called by dispatcher)...")
+        # on_bot_shutdown тепер викликається через dp.shutdown.register
+        # Додаткове закриття bot_aio_session, якщо він не переданий в bot.session
         if bot_aio_session and bot.session != bot_aio_session:
              if hasattr(bot_aio_session, 'closed') and not bot_aio_session.closed:
                  await bot_aio_session.close()
@@ -269,6 +272,11 @@ async def main():
         logger.warning("Running with WEBHOOK configuration. This main() function will setup and run the aiohttp server.")
         logger.warning("Ensure this is run by a process manager or directly if not using Passenger/uWSGI/etc.")
         app = await get_aiohttp_app()
+        
+        # on_startup та on_shutdown для aiohttp додатку, які викликають функції бота
+        # dp.startup.register та dp.shutdown.register вже налаштовані в get_aiohttp_app
+        # Тому тут не потрібно окремо їх реєструвати для app, setup_application це робить
+        
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, host=app_config.WEBAPP_HOST, port=app_config.WEBAPP_PORT)
@@ -285,4 +293,3 @@ async def main():
             logger.info("Webhook server runner cleaned up.")
     else:
         await main_polling()
-        logger.info("Bot is up and running in polling mode! Waiting for updates...")

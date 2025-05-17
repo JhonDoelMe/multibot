@@ -14,27 +14,26 @@ from sqlalchemy import select
 from aiocache import Cache
 from aiogram.filters import Command 
 
-# Прямі імпорти з модулів всередині src
-import config as app_config  # <--- ЗМІНЕНО
-from db.models import User, ServiceChoice # <--- ЗМІНЕНО
-from handlers.utils import show_main_menu_message # <--- ЗМІНЕНО
+from src.db.models import User, ServiceChoice 
+from src.handlers.utils import show_main_menu_message 
+from src import config as app_config  
 
-from .keyboard import (
+from src.modules.settings.keyboard import ( 
     get_main_settings_keyboard,
     get_weather_service_selection_keyboard,
     get_alert_service_selection_keyboard,
     CB_SETTINGS_WEATHER, CB_SETTINGS_ALERTS, CB_SETTINGS_BACK_TO_MAIN_MENU,
-    CB_SET_WEATHER_SERVICE_PREFIX, CB_SET_ALERTS_SERVICE_PREFIX,
+    CB_SET_WEATHER_SERVICE_PREFIX, 
+    CB_SET_ALERTS_SERVICE_PREFIX,
     CB_BACK_TO_SETTINGS_MENU,
     CB_SETTINGS_WEATHER_REMINDER, CB_WEATHER_REMINDER_TOGGLE,
     CB_WEATHER_REMINDER_SET_TIME, CB_WEATHER_REMINDER_TIME_SELECT_PREFIX,
     CB_WEATHER_REMINDER_CUSTOM_TIME_INPUT,
-    CB_SETTINGS_ADMIN_PANEL 
+    CB_SETTINGS_ADMIN_PANEL,
+    get_weather_reminder_settings_keyboard, 
+    get_weather_reminder_time_selection_keyboard
 )
-from .keyboard import ( 
-    get_weather_reminder_settings_keyboard, get_weather_reminder_time_selection_keyboard
-)
-from .admin_keyboard import (
+from src.modules.settings.admin_keyboard import ( 
     get_admin_panel_main_keyboard, 
     CB_ADMIN_BACK_TO_SETTINGS,
     CB_ADMIN_LIST_USERS, 
@@ -46,13 +45,14 @@ from .admin_keyboard import (
 logger = logging.getLogger(__name__)
 router = Router(name="settings-module")
 
-# ... (решта коду без змін) ...
-# Класи станів, _get_user_settings, settings_entry_point і т.д. залишаються такими ж
+class AdminPanelStates(StatesGroup):
+    waiting_for_user_id_for_info = State()
+    waiting_for_user_id_to_block = State()
+    waiting_for_user_id_to_unblock = State()
 
-# Переконайтеся, що весь інший код у файлі залишається таким, як у попередній версії,
-# де ми виправляли "застрягання" FSM. Я показую тільки початок файлу з виправленими імпортами.
+class SettingsStates(StatesGroup):
+    waiting_for_custom_reminder_time = State()
 
-# Повний код функції _get_user_settings для контексту, якщо потрібно перевірити:
 async def _get_user_settings(session: AsyncSession, user_id: int) -> User:
     user = await session.get(User, user_id)
     if not user:
@@ -82,7 +82,6 @@ async def settings_entry_point(target: Union[Message, CallbackQuery], session: A
     user_id = target.from_user.id
     await state.clear() 
     db_user = await _get_user_settings(session, user_id)
-
     text = "⚙️ <b>Налаштування</b>\n\nОберіть, що саме ви хочете налаштувати:"
     reply_markup = get_main_settings_keyboard(
         current_weather_service=db_user.preferred_weather_service,
@@ -91,14 +90,12 @@ async def settings_entry_point(target: Union[Message, CallbackQuery], session: A
         weather_reminder_time=db_user.weather_reminder_time,
         current_user_id=user_id 
     )
-
     answered_callback = False
     if isinstance(target, CallbackQuery):
         try:
             await target.answer()
             answered_callback = True
         except Exception as e: logger.warning(f"Could not answer callback in settings_entry_point: {e}")
-        
         try:
             await target.message.edit_text(text, reply_markup=reply_markup)
         except Exception as e_edit:
@@ -110,44 +107,35 @@ async def settings_entry_point(target: Union[Message, CallbackQuery], session: A
         try:
             await target.answer(text, reply_markup=reply_markup)
         except Exception as e: logger.error(f"Error sending message for settings_entry_point: {e}")
-
     if isinstance(target, CallbackQuery) and not answered_callback:
         try: await target.answer()
         except: pass
-
 
 @router.callback_query(F.data == CB_SETTINGS_BACK_TO_MAIN_MENU)
 async def cq_back_to_main_bot_menu(callback: CallbackQuery, state: FSMContext, session: AsyncSession, bot: Bot):
     await state.clear() 
     await show_main_menu_message(callback)
 
-
 @router.callback_query(F.data == CB_BACK_TO_SETTINGS_MENU)
 async def cq_back_to_settings_menu(callback: CallbackQuery, state: FSMContext, session: AsyncSession, bot: Bot):
     await settings_entry_point(callback, session, bot, state)
 
-# --- Обробник для кнопки "Адмін-панель" ---
 @router.callback_query(F.data == CB_SETTINGS_ADMIN_PANEL)
 async def cq_admin_panel_entry(callback: CallbackQuery, state: FSMContext, session: AsyncSession, bot: Bot): 
     user_id = callback.from_user.id
-    
     if user_id not in app_config.ADMIN_USER_IDS:
         logger.warning(f"User {user_id} (not an admin) somehow pressed admin panel button. Ignoring.")
         try:
             await callback.answer("Ця функція доступна тільки адміністраторам.", show_alert=True)
         except Exception: pass
         return
-
     logger.info(f"Admin user {user_id} accessed admin panel main menu.")
     await state.clear() 
-
     admin_text = "👑 <b>Головне меню Адмін-панелі</b> 👑\n\nОберіть дію:"
     admin_reply_markup = get_admin_panel_main_keyboard()
-
     try:
         await callback.answer()
     except Exception: pass
-
     try:
         await callback.message.edit_text(admin_text, reply_markup=admin_reply_markup)
     except Exception as e_edit:
@@ -162,16 +150,13 @@ async def cq_admin_back_to_settings(callback: CallbackQuery, state: FSMContext, 
     logger.info(f"Admin user {callback.from_user.id} going back to main settings menu from admin panel.")
     await settings_entry_point(callback, session, bot, state) 
 
-
 @router.callback_query(F.data == CB_ADMIN_LIST_USERS)
 async def cq_admin_list_users(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
     user_id = callback.from_user.id
     if user_id not in app_config.ADMIN_USER_IDS:
         await callback.answer("Доступ заборонено.", show_alert=True)
         return
-    
     await callback.answer("Функція 'Список користувачів' в розробці.")
-
 
 @router.callback_query(F.data == CB_ADMIN_USER_INFO)
 async def cq_admin_user_info_prompt(callback: CallbackQuery, state: FSMContext):
@@ -179,7 +164,6 @@ async def cq_admin_user_info_prompt(callback: CallbackQuery, state: FSMContext):
     if user_id not in app_config.ADMIN_USER_IDS:
         await callback.answer("Доступ заборонено.", show_alert=True)
         return
-    
     await state.set_state(AdminPanelStates.waiting_for_user_id_for_info)
     try:
         await callback.message.edit_text("Введіть ID користувача для отримання інформації:", reply_markup=None)
@@ -188,11 +172,8 @@ async def cq_admin_user_info_prompt(callback: CallbackQuery, state: FSMContext):
         logger.error(f"Error in cq_admin_user_info_prompt: {e}")
         await callback.answer("Помилка. Спробуйте ще раз.")
 
-
 @router.message(AdminPanelStates.waiting_for_user_id_for_info, F.text)
 async def process_admin_user_id_for_info(message: Message, state: FSMContext, session: AsyncSession):
-    admin_id = message.from_user.id
-    
     try:
         target_user_id = int(message.text.strip())
     except ValueError:
@@ -206,7 +187,6 @@ async def process_admin_user_id_for_info(message: Message, state: FSMContext, se
             reply_markup=get_admin_panel_main_keyboard()
         )
         return 
-
     target_user = await session.get(User, target_user_id)
     info_text = ""
     if target_user:
@@ -225,10 +205,8 @@ async def process_admin_user_id_for_info(message: Message, state: FSMContext, se
         )
     else:
         info_text = f"Користувача з ID {target_user_id} не знайдено."
-    
     await state.clear()
     await message.answer(info_text, reply_markup=get_admin_panel_main_keyboard())
-
 
 @router.callback_query(F.data == CB_ADMIN_BLOCK_USER)
 async def cq_admin_block_user_prompt(callback: CallbackQuery, state: FSMContext):
@@ -236,7 +214,6 @@ async def cq_admin_block_user_prompt(callback: CallbackQuery, state: FSMContext)
     if user_id not in app_config.ADMIN_USER_IDS:
         await callback.answer("Доступ заборонено.", show_alert=True)
         return
-    
     await state.set_state(AdminPanelStates.waiting_for_user_id_to_block)
     try:
         await callback.message.edit_text("Введіть ID користувача, якого потрібно заблокувати:", reply_markup=None)
@@ -245,11 +222,9 @@ async def cq_admin_block_user_prompt(callback: CallbackQuery, state: FSMContext)
         logger.error(f"Error in cq_admin_block_user_prompt: {e}")
         await callback.answer("Помилка. Спробуйте ще раз.")
 
-
 @router.message(AdminPanelStates.waiting_for_user_id_to_block, F.text)
 async def process_admin_user_id_to_block(message: Message, state: FSMContext, session: AsyncSession):
     admin_id = message.from_user.id
-    
     try:
         target_user_id_to_block = int(message.text.strip())
     except ValueError:
@@ -263,7 +238,6 @@ async def process_admin_user_id_to_block(message: Message, state: FSMContext, se
             reply_markup=get_admin_panel_main_keyboard()
         )
         return
-
     target_user = await session.get(User, target_user_id_to_block)
     response_text = ""
     if target_user:
@@ -276,10 +250,8 @@ async def process_admin_user_id_to_block(message: Message, state: FSMContext, se
             response_text = f"Користувач ID {target_user_id_to_block} вже заблокований."
     else:
         response_text = f"Користувача з ID {target_user_id_to_block} не знайдено."
-        
     await state.clear()
     await message.answer(response_text, reply_markup=get_admin_panel_main_keyboard())
-
 
 @router.callback_query(F.data == CB_ADMIN_UNBLOCK_USER)
 async def cq_admin_unblock_user_prompt(callback: CallbackQuery, state: FSMContext):
@@ -287,7 +259,6 @@ async def cq_admin_unblock_user_prompt(callback: CallbackQuery, state: FSMContex
     if user_id not in app_config.ADMIN_USER_IDS:
         await callback.answer("Доступ заборонено.", show_alert=True)
         return
-        
     await state.set_state(AdminPanelStates.waiting_for_user_id_to_unblock)
     try:
         await callback.message.edit_text("Введіть ID користувача, якого потрібно розблокувати:", reply_markup=None)
@@ -296,11 +267,9 @@ async def cq_admin_unblock_user_prompt(callback: CallbackQuery, state: FSMContex
         logger.error(f"Error in cq_admin_unblock_user_prompt: {e}")
         await callback.answer("Помилка. Спробуйте ще раз.")
 
-
 @router.message(AdminPanelStates.waiting_for_user_id_to_unblock, F.text)
 async def process_admin_user_id_to_unblock(message: Message, state: FSMContext, session: AsyncSession):
     admin_id = message.from_user.id
-
     try:
         target_user_id_to_unblock = int(message.text.strip())
     except ValueError:
@@ -314,7 +283,6 @@ async def process_admin_user_id_to_unblock(message: Message, state: FSMContext, 
             reply_markup=get_admin_panel_main_keyboard()
         )
         return
-
     target_user = await session.get(User, target_user_id_to_unblock)
     response_text = ""
     if target_user:
@@ -327,12 +295,9 @@ async def process_admin_user_id_to_unblock(message: Message, state: FSMContext, 
             response_text = f"Користувач ID {target_user_id_to_unblock} не був заблокований."
     else:
         response_text = f"Користувача з ID {target_user_id_to_unblock} не знайдено."
-        
     await state.clear()
     await message.answer(response_text, reply_markup=get_admin_panel_main_keyboard())
 
-
-# Попередні обробники (налаштування погоди, тривог, часу нагадувань)
 @router.callback_query(F.data == CB_SETTINGS_WEATHER)
 async def cq_select_weather_service_menu(callback: CallbackQuery, session: AsyncSession, bot: Bot):
     user_id = callback.from_user.id
@@ -668,4 +633,3 @@ async def cq_weather_reminder_time_selected(callback: CallbackQuery, state: FSMC
         logger.exception(f"Unexpected error setting reminder time for user {user_id}", exc_info=True)
         try: await callback.answer("Не вдалося встановити час. Спробуйте пізніше.", show_alert=True)
         except Exception: pass
-

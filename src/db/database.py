@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, Asyn
 from sqlalchemy.orm import DeclarativeBase
 
 # Імпортуємо конфігурацію для доступу до DATABASE_URL
-import config as app_config # <--- ЗМІНЕНО: Видалено 'src.'
+from src import config as app_config # <--- ПОВЕРНУЛИ до 'from src import config'
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +17,7 @@ class Base(DeclarativeBase):
     pass
 
 # --- Створення асинхронного двигуна SQLAlchemy (engine) НА РІВНІ МОДУЛЯ ---
-if not hasattr(app_config, 'DATABASE_URL') or not app_config.DATABASE_URL: # Додано перевірку hasattr
+if not hasattr(app_config, 'DATABASE_URL') or not app_config.DATABASE_URL: 
     logger.error("DATABASE_URL is not set. Database engine cannot be created.")
     engine = None 
 else:
@@ -47,8 +47,8 @@ async def initialize_database() -> Tuple[bool, Optional[async_sessionmaker[Async
     
     try:
         async with engine.begin() as conn:
-            # from db import models # Імпорт моделей для Base.metadata.create_all
-            # Краще, щоб моделі були імпортовані там, де визначається Base або в __init__.py
+            # Імпорт моделей потрібен тут, щоб Base.metadata знав про них
+            from src.db import models 
             logger.info("Creating/checking database tables...")
             await conn.run_sync(Base.metadata.create_all)
             logger.info("Database tables checked/created successfully.")
@@ -70,7 +70,7 @@ async def initialize_database() -> Tuple[bool, Optional[async_sessionmaker[Async
         logger.exception("An error occurred during database initialization:", exc_info=e)
         return False, None
 
-async def get_db_session() -> AsyncSession: # Ця функція, здається, не використовується напряму
+async def get_db_session() -> AsyncSession: 
     if not async_session_factory:
         logger.error("async_session_factory is not initialized. Call initialize_database() first.")
         raise RuntimeError("Database session factory not initialized.")
@@ -84,9 +84,7 @@ async def get_db_session() -> AsyncSession: # Ця функція, здаєть�
         finally:
             await session.close()
 
-def get_db_session_context() -> async_sessionmaker[AsyncSession]: # Ця функція, здається, не використовується напряму
+def get_db_session_context() -> async_sessionmaker[AsyncSession]: 
     if not async_session_factory:
         raise RuntimeError("Database session factory not initialized for context.")
     return async_session_factory
-
-# --- Ініціалізація бази даних при імпорті модуля ---
