@@ -17,7 +17,7 @@ WEATHER_API_KEY = os.getenv("WEATHER_API_KEY")
 UKRAINEALARM_API_TOKEN = os.getenv("UKRAINEALARM_API_TOKEN")
 ALERTS_IN_UA_TOKEN = os.getenv("ALERTS_IN_UA_TOKEN")
 WEATHERAPI_COM_KEY = os.getenv("WEATHERAPI_COM_KEY")
-# RATEXCHANGES_API_KEY = os.getenv("RATEXCHANGES_API_KEY") # Якщо використовується, розкоментуйте
+# RATEXCHANGES_API_KEY = os.getenv("RATEXCHANGES_API_KEY")
 
 # --- Налаштування Вебхука ---
 WEBHOOK_BASE_URL = os.getenv("WEBHOOK_BASE_URL")
@@ -41,7 +41,15 @@ API_SESSION_CONNECT_TIMEOUT = int(os.getenv("API_SESSION_CONNECT_TIMEOUT", 10))
 
 # --- Налаштування кешування (aiocache) ---
 CACHE_BACKEND = os.getenv("CACHE_BACKEND", "memory")
-CACHE_REDIS_URL = os.getenv("CACHE_REDIS_URL", "redis://localhost:6379/0")
+# CACHE_REDIS_URL використовується для aiocache. RedisStorage для FSM може використовувати інший URL або той самий.
+CACHE_REDIS_URL = os.getenv("CACHE_REDIS_URL", "redis://localhost:6379/0") 
+
+# --- Налаштування Redis для FSM (Finite State Machine) ---
+# Можна використовувати той самий Redis, що й для кешу, але, можливо, іншу базу даних (наприклад, /1 замість /0)
+# Або зовсім інший сервер Redis.
+# Якщо FSM_REDIS_URL не встановлено, бот буде використовувати MemoryStorage (потрібно буде додати логіку в bot.py)
+FSM_STORAGE_TYPE = os.getenv("FSM_STORAGE_TYPE", "memory").lower() # "memory" або "redis"
+FSM_REDIS_URL = os.getenv("FSM_REDIS_URL", "redis://localhost:6379/1") # Окремий URL для FSM Redis
 
 CACHE_TTL_ALERTS = int(os.getenv("CACHE_TTL_ALERTS", 60))
 CACHE_TTL_ALERTS_BACKUP = int(os.getenv("CACHE_TTL_ALERTS_BACKUP", 90))
@@ -51,13 +59,15 @@ CACHE_TTL_CURRENCY = int(os.getenv("CACHE_TTL_CURRENCY", 3600))
 CACHE_TTL_REGIONS = int(os.getenv("CACHE_TTL_REGIONS", 86400))
 
 # --- Sentry/GlitchTip Configuration ---
-# Замість SENTRY_DSN тепер може бути GLITCHTIP_DSN або універсальна назва
-# Залишимо SENTRY_DSN як основну, але врахуємо GLITCHTIP_DSN, якщо SENTRY_DSN відсутній
 SENTRY_DSN = os.getenv("SENTRY_DSN") or os.getenv("GLITCHTIP_DSN")
-BOT_ENVIRONMENT = os.getenv("BOT_ENVIRONMENT", "development") # 'development', 'production', 'staging'
-BOT_VERSION = os.getenv("BOT_VERSION", "unknown") # Версія вашого бота
+BOT_ENVIRONMENT = os.getenv("BOT_ENVIRONMENT", "development")
+BOT_VERSION = os.getenv("BOT_VERSION", "unknown")
 
 THROTTLING_RATE_DEFAULT = float(os.getenv("THROTTLING_RATE_DEFAULT", 0.7))
+
+# --- Конфігурація для Nominatim (якщо буде використовуватися) ---
+NOMINATIM_USER_AGENT = os.getenv("NOMINATIM_USER_AGENT", f"TelegramBotAnubisUA/1.0 ({BOT_VERSION})")
+
 
 if not BOT_TOKEN:
     critical_error_msg = "CRITICAL ERROR: BOT_TOKEN is not defined in environment variables. Bot cannot start."
@@ -95,7 +105,6 @@ def log_config_status():
         "WEATHERAPI_COM_KEY (WeatherAPI.com)": WEATHERAPI_COM_KEY,
         "UKRAINEALARM_API_TOKEN": UKRAINEALARM_API_TOKEN,
         "ALERTS_IN_UA_TOKEN": ALERTS_IN_UA_TOKEN
-        # "RATEXCHANGES_API_KEY": RATEXCHANGES_API_KEY # Якщо використовується
     }
     for name, key_value in service_keys_status.items():
         if key_value:
@@ -109,9 +118,18 @@ def log_config_status():
     logger.info(f"CACHE_BACKEND: {CACHE_BACKEND}")
     if CACHE_BACKEND == 'redis':
         if CACHE_REDIS_URL:
-            logger.info(f"  CACHE_REDIS_URL: {CACHE_REDIS_URL}")
+            logger.info(f"  CACHE_REDIS_URL (for aiocache): {CACHE_REDIS_URL}")
         else:
-            logger.warning("  CACHE_REDIS_URL: NOT SET - Redis cache will not work!")
+            logger.warning("  CACHE_REDIS_URL (for aiocache): NOT SET - Redis cache (aiocache) will not work!")
+    
+    logger.info(f"FSM_STORAGE_TYPE: {FSM_STORAGE_TYPE}")
+    if FSM_STORAGE_TYPE == 'redis':
+        if FSM_REDIS_URL:
+            logger.info(f"  FSM_REDIS_URL (for FSM states): {FSM_REDIS_URL}")
+        else:
+            logger.warning("  FSM_REDIS_URL: NOT SET - FSM states will fallback to MemoryStorage if Redis is selected but URL is missing.")
+
+
     logger.info(f"  CACHE_TTL_ALERTS: {CACHE_TTL_ALERTS}s, CACHE_TTL_ALERTS_BACKUP: {CACHE_TTL_ALERTS_BACKUP}s")
     logger.info(f"  CACHE_TTL_WEATHER: {CACHE_TTL_WEATHER}s, CACHE_TTL_WEATHER_BACKUP: {CACHE_TTL_WEATHER_BACKUP}s")
     logger.info(f"  CACHE_TTL_CURRENCY: {CACHE_TTL_CURRENCY}s, CACHE_TTL_REGIONS: {CACHE_TTL_REGIONS}s")
@@ -119,6 +137,25 @@ def log_config_status():
     logger.info(f"SENTRY_DSN (or GLITCHTIP_DSN): {'Loaded - Sentry/GlitchTip enabled' if SENTRY_DSN else 'NOT SET - Sentry/GlitchTip disabled'}")
     logger.info(f"BOT_ENVIRONMENT: {BOT_ENVIRONMENT}")
     logger.info(f"BOT_VERSION: {BOT_VERSION}")
+    logger.info(f"NOMINATIM_USER_AGENT: {NOMINATIM_USER_AGENT}")
 
     logger.info(f"THROTTLING_RATE_DEFAULT: {THROTTLING_RATE_DEFAULT}s")
     logger.info("--- End Configuration Status ---")
+
+# Додаємо TZ_KYIV для глобального використання, якщо потрібно
+try:
+    import pytz
+    TZ_KYIV = pytz.timezone('Europe/Kyiv')
+    TZ_KYIV_NAME = 'Europe/Kyiv'
+    logger.debug(f"TZ_KYIV initialized to {TZ_KYIV_NAME} using pytz.")
+except ImportError:
+    logger.warning("pytz library not found. Timezone features might be limited or use system defaults / UTC.")
+    TZ_KYIV = None
+    TZ_KYIV_NAME = "N/A (pytz not installed)"
+except pytz.exceptions.UnknownTimeZoneError:
+    logger.error("Timezone 'Europe/Kyiv' not found by pytz. Using UTC as fallback for Kyiv time.")
+    from datetime import timezone as dt_timezone # Імпорт для timezone.utc
+    TZ_KYIV = dt_timezone.utc
+    TZ_KYIV_NAME = "UTC (fallback)"
+
+# Додаткові налаштування для aiocache
