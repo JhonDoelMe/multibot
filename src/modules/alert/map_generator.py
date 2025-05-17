@@ -42,15 +42,13 @@ REGION_NAME_TO_SVG_ID_MAP: Dict[str, str] = {
 
 ALERT_COLOR = "#FF0000"
 NO_ALERT_COLOR = "#B0B0B0"
-DEFAULT_PATH_COLOR = "#CCCCCC" 
 
 SVG_NAMESPACE = "http://www.w3.org/2000/svg"
 ET.register_namespace('', SVG_NAMESPACE)
 
 async def _generate_modified_svg_bytes(api_regions_data: List[Dict]) -> Optional[bytes]:
-    """
-    Внутренняя функция для генерации модифицированных SVG-байт.
-    """
+    # ... (эта функция остается такой же, как в предыдущем ответе, 
+    #    она генерирует модифицированные SVG байты) ...
     if not os.path.exists(SVG_TEMPLATE_PATH):
         logger.error(f"SVG template not found at {SVG_TEMPLATE_PATH}")
         return None
@@ -79,8 +77,6 @@ async def _generate_modified_svg_bytes(api_regions_data: List[Dict]) -> Optional
                     path_element.set('fill', ALERT_COLOR)
                 else:
                     path_element.set('fill', NO_ALERT_COLOR)
-            # else: # Опционально: цвет для неизвестных регионов, если они есть в SVG, но не в маппинге
-            #     path_element.set('fill', DEFAULT_PATH_COLOR) 
         
         svg_bytes_io = io.BytesIO()
         tree.write(svg_bytes_io, encoding='utf-8', xml_declaration=True)
@@ -97,27 +93,73 @@ async def _generate_modified_svg_bytes(api_regions_data: List[Dict]) -> Optional
 
 async def generate_alert_map_image_png(api_regions_data: List[Dict], output_width: int = 700) -> Optional[bytes]:
     """
-    Генерирует PNG изображение карты тревог.
-    Сначала создает SVG, затем конвертирует его в PNG.
+    Генерирует PNG изображение карты тревог используя svglib и reportlab.
     """
     svg_bytes = await _generate_modified_svg_bytes(api_regions_data)
     if not svg_bytes:
         logger.error("SVG generation failed, cannot convert to PNG.")
         return None
     try:
-        import cairosvg
-        # Увеличим DPI для лучшего качества, если понадобится, или `scale`
-        # parent_width и parent_height можно использовать, если SVG имеет относительные размеры
-        png_bytes = cairosvg.svg2png(bytestring=svg_bytes, output_width=output_width, dpi=150) 
-        logger.info(f"SVG map successfully converted to PNG (width: {output_width}px, dpi: 150).")
-        return png_bytes
+        from svglib.svglib import svg2rlg
+        from reportlab.graphics import renderPM
+        from reportlab.lib.utils import ImageReader # Для BytesIO
+        from PIL import Image # Для определения DPI и масштабирования
+
+        # Читаем SVG из байтов
+        svg_file_like = io.BytesIO(svg_bytes)
+        drawing = svg2rlg(svg_file_like)
+
+        if not drawing:
+            logger.error("svglib.svg2rlg returned None, cannot render PNG.")
+            return None
+            
+        # Масштабирование для достижения нужной ширины
+        # reportlab работает с точками (1/72 дюйма)
+        # Нам нужно отмасштабировать drawing, чтобы его ширина стала output_width пикселей при разумном DPI
+        # По умолчанию reportlab может рендерить с DPI=72. Если мы хотим output_width, то
+        # scale_factor = output_width / drawing.width (если drawing.width в точках)
+        
+        # Более простой способ - использовать Pillow для финального ресайза,
+        # или рендерить в PIL Image и затем масштабировать.
+        # renderPM.drawToFile(drawing, "temp_map.png", fmt="PNG") # Временный файл
+        # with Image.open("temp_map.png") as img:
+        #     img = img.resize((output_width, int(img.height * output_width / img.width)))
+        #     png_bytes_io = io.BytesIO()
+        #     img.save(png_bytes_io, format="PNG")
+        #     png_bytes = png_bytes_io.getvalue()
+        # os.remove("temp_map.png")
+        
+        # Прямой рендеринг в байты с ReportLab, но контроль размера сложнее.
+        # Попробуем рендерить в PIL Image, а затем получить байты.
+        pil_image = renderPM.drawToPIL(drawing, bg=0xffffff, dpi=150) # bg - цвет фона (белый)
+        
+        if pil_image:
+            # Масштабируем изображение PIL до нужной ширины, сохраняя пропорции
+            original_width, original_height = pil_image.size
+            if original_width == 0 : # Предохранитель
+                logger.error("PIL image from renderPM has zero width.")
+                return None
+
+            aspect_ratio = original_height / original_width
+            new_height = int(output_width * aspect_ratio)
+            
+            resized_image = pil_image.resize((output_width, new_height), Image.Resampling.LANCZOS)
+            
+            png_bytes_io = io.BytesIO()
+            resized_image.save(png_bytes_io, format="PNG")
+            png_bytes = png_bytes_io.getvalue()
+            logger.info(f"SVG map successfully converted to PNG using svglib/reportlab (width: {output_width}px).")
+            return png_bytes
+        else:
+            logger.error("renderPM.drawToPIL returned None.")
+            return None
+
     except ImportError:
-        logger.error("cairosvg library is not installed or importable. Cannot convert SVG to PNG.")
-        return None # Важно вернуть None, чтобы хендлер знал, что PNG не готов
+        logger.error("svglib or reportlab or Pillow is not installed. Cannot convert SVG to PNG.")
+        return None
     except Exception as e:
-        logger.exception("Error converting SVG to PNG:", exc_info=True)
+        logger.exception("Error converting SVG to PNG using svglib/reportlab:", exc_info=True)
         return None
 
-# Оставляем функцию генерации SVG, если она понадобится для отправки как документа или для отладки
 async def generate_alert_map_image_svg(api_regions_data: List[Dict]) -> Optional[bytes]:
     return await _generate_modified_svg_bytes(api_regions_data)
